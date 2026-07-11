@@ -131,20 +131,283 @@ $statuses = ['active', 'inactive'];
     <link rel="stylesheet" href="../assets/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; }
-        .navbar { background: #2c3e50; color: white; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
-        .navbar h1 { font-size: 24px; }
-        .nav-links { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-        .nav-links a { color: white; text-decoration: none; padding: 8px 16px; border-radius: 4px; transition: background 0.3s; }
-        .nav-links a:hover { background: #34495e; }
-        .nav-links a.active { background: #3498db; }
-        .container { max-width: 1400px; margin: 30px auto; padding: 0 20px; }
-        .message { 
-            background: #d4edda; 
-            color: #155724; 
-            padding: 15px; 
-            border-radius: 4px; 
+        /* ----- reset & base ----- */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f1f5f9;
+            min-height: 100vh;
+            display: flex;
+        }
+
+        /* ----- SIDEBAR ----- */
+        .sidebar {
+            width: 250px;
+            background: #0f172a;
+            color: #e2e8f0;
+            display: flex;
+            flex-direction: column;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            padding: 24px 18px 20px;
+            flex-shrink: 0;
+        }
+
+        .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 32px;
+        }
+
+        .sidebar-brand i {
+            font-size: 1.6rem;
+            color: #38bdf8;
+        }
+
+        .sidebar-brand h2 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            color: #ffffff;
+        }
+
+        .sidebar-brand h2 span {
+            display: block;
+            font-weight: 400;
+            font-size: 0.65rem;
+            color: #94a3b8;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+        }
+
+        .nav-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: 1;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            border-radius: 12px;
+            color: #cbd5e1;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: all 0.15s;
+        }
+
+        .nav-item i {
+            width: 20px;
+            text-align: center;
+            font-size: 1rem;
+        }
+
+        .nav-item:hover {
+            background: #1e293b;
+            color: #f1f5f9;
+        }
+
+        .nav-item.active {
+            background: #1e293b;
+            color: #38bdf8;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            border-top: 1px solid #1e293b;
+            padding-top: 18px;
+        }
+
+        .logout-btn-side {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 12px;
+            color: #94a3b8;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: 0.15s;
+        }
+
+        .logout-btn-side:hover {
+            background: #1e293b;
+            color: #f1f5f9;
+        }
+
+        /* ----- MAIN CONTENT ----- */
+        .main-content {
+            flex: 1;
+            padding: 0 32px 32px 32px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
+        .top-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 32px;
+            background: #0f172a;
+            border-radius: 0;
+            margin: 0 -32px 24px -32px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .header-left h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #f8fafc;
+            letter-spacing: -0.3px;
+        }
+
+        .header-left h1 small {
+            font-weight: 400;
+            font-size: 0.85rem;
+            color: #94a3b8;
+            margin-left: 8px;
+        }
+
+        .header-left h1 i {
+            color: #38bdf8;
+            margin-right: 8px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        /* Notification bell */
+        .notif-bell {
+            position: relative;
+            color: #eef5ff;
+            background: #1a2f58;
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.18s ease;
+            cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.18);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 8px 18px rgba(15, 23, 42, 0.3);
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .notif-bell i {
+            font-size: 1.12rem;
+        }
+
+        .notif-bell:hover {
+            background: #203867;
+            color: #ffffff;
+            transform: translateY(-1px);
+        }
+
+        .notif-bell:active {
+            transform: translateY(0);
+        }
+
+        .notif-bell:focus-visible {
+            outline: 2px solid #7dd3fc;
+            outline-offset: 2px;
+        }
+
+        .notif-badge {
+            position: absolute;
+            top: -5px;
+            right: -6px;
+            background: #ef4444;
+            color: #fff;
+            font-size: 0.64rem;
+            font-weight: 700;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 5px;
+            border-radius: 999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid #1a2f58;
+            line-height: 1;
+        }
+
+        /* User profile chip */
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(255,255,255,0.08);
+            padding: 4px 16px 4px 6px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.12);
+            cursor: default;
+            backdrop-filter: blur(2px);
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #3b82f6;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 1rem;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+
+        .user-info .name {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #f1f5f9;
+        }
+
+        .user-info .role-label {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            font-weight: 500;
+            text-transform: capitalize;
+        }
+
+        /* ----- PAGE CARD / CONTAINER ----- */
+        .container {
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+        }
+
+        .message {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 12px;
             margin-bottom: 20px;
             border-left: 4px solid #28a745;
         }
@@ -153,24 +416,69 @@ $statuses = ['active', 'inactive'];
             color: #721c24;
             border-left-color: #dc3545;
         }
-        .section { background: white; padding: 25px; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow-x: auto; }
-        .section h2 { margin-bottom: 20px; color: #2c3e50; border-bottom: 2px solid #f4f6f9; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
-        .section h2 .btn-create { 
-            background: #28a745; 
-            color: white; 
-            padding: 8px 20px; 
-            border: none; 
-            border-radius: 4px; 
-            cursor: pointer; 
+
+        .section {
+            background: white;
+            padding: 25px;
+            border-radius: 16px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border: 1px solid #eef2f7;
+            overflow-x: auto;
+        }
+        .section h2 {
+            margin-bottom: 20px;
+            color: #0f172a;
+            border-bottom: 2px solid #f1f5f9;
+            padding-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            font-size: 1.2rem;
+        }
+        .section h2 .btn-create {
+            background: #2563eb;
+            color: white;
+            padding: 8px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
             font-size: 14px;
             transition: background 0.3s;
         }
-        .section h2 .btn-create:hover { background: #218838; }
-        table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #e0e0e0; }
-        th { background: #f8f9fa; font-weight: 600; color: #495057; position: sticky; top: 0; }
-        tr:hover { background: #f8f9fa; }
-        .badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+        .section h2 .btn-create:hover { background: #1d4ed8; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th, td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        th {
+            background: #f8fafc;
+            font-weight: 600;
+            color: #64748b;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            position: sticky;
+            top: 0;
+        }
+        tr:hover td { background: #f8fafc; }
+
+        .badge {
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            white-space: nowrap;
+            display: inline-block;
+        }
         .badge-admin { background: #e74c3c; color: white; }
         .badge-coordinator { background: #3498db; color: white; }
         .badge-supervisor { background: #f39c12; color: white; }
@@ -178,32 +486,54 @@ $statuses = ['active', 'inactive'];
         .badge-pending { background: #f39c12; color: white; }
         .badge-active { background: #2ecc71; color: white; }
         .badge-inactive { background: #e74c3c; color: white; }
-        select, button, input { padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
-        select { min-width: 100px; }
-        .btn-primary { background: #3498db; color: white; border: none; cursor: pointer; }
-        .btn-primary:hover { background: #2980b9; }
-        .btn-success { background: #2ecc71; color: white; border: none; cursor: pointer; }
-        .btn-success:hover { background: #27ae60; }
-        .btn-danger { background: #e74c3c; color: white; border: none; cursor: pointer; }
-        .btn-danger:hover { background: #c0392b; }
-        .btn-warning { background: #f39c12; color: white; border: none; cursor: pointer; }
-        .btn-warning:hover { background: #d68910; }
-        .btn-info { background: #00bcd4; color: white; border: none; cursor: pointer; }
-        .btn-info:hover { background: #0097a7; }
-        .inline-form { display: inline-flex; gap: 8px; align-items: center; margin: 0; }
-        .actions-wrap { display: inline-flex; gap: 8px; align-items: center; }
-        .logout-btn { background: #e74c3c; padding: 8px 16px; border-radius: 4px; color: white; text-decoration: none; }
-        .logout-btn:hover { background: #c0392b; }
-        .user-info { font-size: 12px; color: #666; }
-        .user-name { font-weight: 600; color: #2c3e50; }
-        .edit-profile-btn { background: #00bcd4; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-        .edit-profile-btn:hover { background: #0097a7; }
-        .profile-details { display: none; margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px; }
-        .profile-details.active { display: block; }
-        .profile-details .detail-row { display: grid; grid-template-columns: 150px 1fr; gap: 10px; padding: 5px 0; border-bottom: 1px solid #e0e0e0; }
-        .profile-details .detail-row:last-child { border-bottom: none; }
-        .profile-details .label { font-weight: 600; color: #495057; }
-        
+
+        .user-name { font-weight: 600; color: #0f172a; }
+        .user-info { font-size: 12px; color: #94a3b8; }
+
+        .inline-form {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            margin: 0;
+        }
+        .actions-wrap {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        select {
+            padding: 4px 8px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 12px;
+            background: white;
+        }
+
+        button {
+            padding: 4px 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        button i { font-size: 13px; }
+        button:hover { opacity: 0.85; }
+
+        .btn-success { background: #2ecc71; color: white; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-primary { background: #3498db; color: white; }
+
+        .edit-profile-btn {
+            background: #00bcd4;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+
         /* Modal Styles */
         .modal {
             display: none;
@@ -225,7 +555,7 @@ $statuses = ['active', 'inactive'];
         .modal-content {
             background: white;
             padding: 30px;
-            border-radius: 8px;
+            border-radius: 16px;
             max-width: 700px;
             width: 100%;
             max-height: 90vh;
@@ -234,95 +564,73 @@ $statuses = ['active', 'inactive'];
             animation: slideDown 0.3s ease;
         }
         @keyframes slideDown {
-            from {
-                transform: translateY(-50px);
-                opacity: 0;
-            }
-            to {
-                transform: translateY(0);
-                opacity: 1;
-            }
+            from { transform: translateY(-50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
         }
         .modal-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
-            border-bottom: 2px solid #f4f6f9;
+            border-bottom: 2px solid #f1f5f9;
             padding-bottom: 10px;
         }
-        .modal-header h2 {
-            color: #2c3e50;
-        }
+        .modal-header h2 { color: #0f172a; }
         .modal-close {
             font-size: 28px;
             font-weight: bold;
             color: #aaa;
             cursor: pointer;
-            transition: color 0.3s;
             background: none;
             border: none;
         }
-        .modal-close:hover {
-            color: #333;
-        }
+        .modal-close:hover { color: #333; }
         .modal .form-row {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 15px;
         }
-        .modal .form-group {
-            margin-bottom: 15px;
-        }
-        .modal .form-group.full-width {
-            grid-column: 1 / -1;
-        }
+        .modal .form-group { margin-bottom: 15px; }
+        .modal .form-group.full-width { grid-column: 1 / -1; }
         .modal label {
             display: block;
             margin-bottom: 5px;
-            color: #666;
+            color: #64748b;
             font-weight: 500;
             font-size: 13px;
         }
         .modal input, .modal select, .modal textarea {
             width: 100%;
             padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
             font-size: 14px;
         }
-        .modal textarea {
-            resize: vertical;
-            min-height: 60px;
-        }
         .modal input:focus, .modal select:focus, .modal textarea:focus {
-            border-color: #3498db;
+            border-color: #3b82f6;
             outline: none;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
         }
         .modal .btn-submit {
-            background: #28a745;
+            background: #2563eb;
             color: white;
             padding: 10px 30px;
             border: none;
-            border-radius: 4px;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 16px;
             transition: background 0.3s;
             width: 100%;
         }
-        .modal .btn-submit:hover {
-            background: #218838;
-        }
-        .modal .required {
-            color: #dc3545;
-        }
+        .modal .btn-submit:hover { background: #1d4ed8; }
+        .modal .required { color: #dc2626; }
         .modal .password-actions {
             display: flex;
             gap: 10px;
             margin-top: 5px;
         }
         .modal .password-actions button {
-            background: #6c757d;
+            background: #94a3b8;
             color: white;
             border: none;
             padding: 5px 10px;
@@ -330,27 +638,86 @@ $statuses = ['active', 'inactive'];
             cursor: pointer;
             font-size: 12px;
         }
-        .modal .password-actions button:hover {
-            background: #5a6268;
-        }
-        /* Right sidebar profile panel */
+        .modal .password-actions button:hover { background: #64748b; }
+
+        /* Profile Sidebar */
         .profile-sidebar-overlay { display: none; }
-        #profileSidebarOverlay.open { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 1050; }
-        #profileSidebar { position: fixed; right: 0; top: 0; height: 100%; width: 380px; max-width: 90%; background: #fff; box-shadow: -8px 0 30px rgba(0,0,0,0.2); transform: translateX(100%); transition: transform 0.28s ease; z-index: 1100; padding: 20px; overflow-y: auto; }
+        #profileSidebarOverlay.open {
+            display: block;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            z-index: 1050;
+        }
+        #profileSidebar {
+            position: fixed;
+            right: 0;
+            top: 0;
+            height: 100%;
+            width: 380px;
+            max-width: 90%;
+            background: #fff;
+            box-shadow: -8px 0 30px rgba(0,0,0,0.2);
+            transform: translateX(100%);
+            transition: transform 0.28s ease;
+            z-index: 1100;
+            padding: 24px;
+            overflow-y: auto;
+        }
         #profileSidebar.open { transform: translateX(0); }
-        #profileSidebar .modal-close { font-size: 26px; }
-        @media (max-width: 768px) {
-            .navbar { flex-direction: column; text-align: center; }
-            .nav-links { justify-content: center; margin-top: 10px; }
-            .profile-details .detail-row { grid-template-columns: 1fr; }
-            table { font-size: 12px; }
-            th, td { padding: 5px; }
+        #profileSidebar .modal-close {
+            font-size: 26px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #94a3b8;
+        }
+        #profileSidebar .modal-close:hover { color: #333; }
+
+        /* ----- RESPONSIVE ----- */
+        @media (max-width: 720px) {
+            body {
+                flex-direction: column;
+            }
+            .sidebar {
+                width: 100%;
+                height: auto;
+                position: relative;
+                padding: 16px 20px;
+            }
+            .nav-section {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+            .nav-item {
+                padding: 8px 14px;
+                font-size: 0.85rem;
+            }
+            .main-content {
+                padding: 0 16px 16px 16px;
+            }
+            .top-header {
+                flex-direction: column;
+                align-items: stretch;
+                padding: 12px 16px;
+                margin: 0 -16px 16px -16px;
+            }
+            .header-right {
+                justify-content: flex-start;
+            }
             .modal .form-row { grid-template-columns: 1fr; }
             .modal-content { padding: 20px; margin: 10px; }
+            table { font-size: 12px; }
+            th, td { padding: 6px 8px; }
+        }
+
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
     <script>
-        // Open profile in right sidebar by passing serialized user JSON
         function openProfile(userJson) {
             try {
                 const decoded = decodeURIComponent(userJson);
@@ -358,9 +725,9 @@ $statuses = ['active', 'inactive'];
                 const content = document.getElementById('profileSidebarContent');
                 content.innerHTML = `
                     <h2>${escapeHtml(getFullNameJS(user))}</h2>
-                    <div style="margin-top:10px; color:#666;">@${escapeHtml(user.username || '')}</div>
-                    <hr style="margin:15px 0;">
-                    <div style="font-size:14px; color:#333;">
+                    <div style="margin-top:10px; color:#94a3b8;">@${escapeHtml(user.username || '')}</div>
+                    <hr style="margin:15px 0; border-color:#f1f5f9;">
+                    <div style="font-size:14px; color:#334155;">
                         <div style="margin-bottom:8px;"><strong>Full Name:</strong> ${escapeHtml(getFullNameJS(user))}</div>
                         <div style="margin-bottom:8px;"><strong>First Name:</strong> ${escapeHtml(user.firstname || '')}</div>
                         <div style="margin-bottom:8px;"><strong>Middle Name:</strong> ${escapeHtml(user.middlename || 'N/A')}</div>
@@ -389,7 +756,6 @@ $statuses = ['active', 'inactive'];
             document.body.style.overflow = 'auto';
         }
 
-        // Helper to escape HTML when inserting from JSON
         function escapeHtml(str) {
             if (!str) return '';
             return String(str).replace(/[&<>"'`]/g, function (s) {
@@ -397,7 +763,6 @@ $statuses = ['active', 'inactive'];
             });
         }
 
-        // Recreate full name in JS from user object
         function getFullNameJS(user) {
             return [user.firstname, user.middlename, user.lastname, user.suffix].filter(Boolean).join(' ');
         }
@@ -412,19 +777,13 @@ $statuses = ['active', 'inactive'];
             document.body.style.overflow = 'auto';
         }
         
-        // Close create modal when clicking outside
         window.onclick = function(event) {
             const modal = document.getElementById('createUserModal');
-            if (event.target === modal) {
-                closeModal();
-            }
+            if (event.target === modal) closeModal();
             const overlay = document.getElementById('profileSidebarOverlay');
-            if (event.target === overlay) {
-                closeProfile();
-            }
+            if (event.target === overlay) closeProfile();
         }
         
-        // Generate random password
         function generatePassword() {
             const length = 12;
             const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
@@ -436,7 +795,6 @@ $statuses = ['active', 'inactive'];
             document.getElementById('confirm_password').value = password;
         }
         
-        // Toggle password visibility
         function togglePasswordVisibility() {
             const passwordField = document.getElementById('password');
             const confirmField = document.getElementById('confirm_password');
@@ -447,81 +805,104 @@ $statuses = ['active', 'inactive'];
     </script>
 </head>
 <body>
-    <div class="app-shell">
-  <aside class="sidebar">
-           <div class="sidebar-brand">
-            <i class="fas fa-shield-alt"></i>
-        
+
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <i class="fa-solid fa-shield-alt"></i>
+            <h2>Admin<span>Panel</span></h2>
         </div>
-            <nav class="nav-section">
-                <a class="nav-item " href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item active " href="user_management.php"><i class="fa-solid fa-users-gear"></i> User Management</a>
-            </nav>
-            <div class="sidebar-footer">
-                <div class="user-chip">
-                    <i class="fa-solid fa-user-circle"></i>
-                    <div>
-                        <div class="name"><?php echo htmlspecialchars($_SESSION['fullname'] ?? $_SESSION['username']); ?></div>
+        <nav class="nav-section">
+            <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
+            <a class="nav-item active" href="user_management.php"><i class="fa-solid fa-users-gear"></i> User Management</a>
+        </nav>
+        <div class="sidebar-footer">
+            <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+
+        <!-- TOP HEADER -->
+        <div class="top-header">
+            <div class="header-left">
+                <h1>
+                    <i class="fa-solid fa-users-gear"></i>
+                    User Management
+                    <small>Admin</small>
+                </h1>
+            </div>
+            <div class="header-right">
+                <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
+                    <i class="fa-regular fa-bell"></i>
+                    <span class="notif-badge">3</span>
+                </button>
+                <div class="user-profile">
+                    <div class="user-avatar">
+                        <?php
+                            $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Admin';
+                            $initials = '';
+                            $parts = explode(' ', trim($fullname));
+                            if (count($parts) >= 2) {
+                                $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
+                            } else {
+                                $initials = strtoupper(substr($fullname, 0, 2));
+                            }
+                            echo htmlspecialchars($initials);
+                        ?>
+                    </div>
+                    <div class="user-info">
+                        <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
                         <div class="role-label">Administrator</div>
                     </div>
                 </div>
-                <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
             </div>
-        </aside>
+        </div>
 
-        <main class="main-content">
-            <div class="top-bar">
-              
-            </div>
+        <div class="container">
+            <?php if ($message): 
+                $isError = strpos($message, 'Error:') !== false || strpos($message, 'Failed') !== false;
+            ?>
+                <div class="message <?php echo $isError ? 'error' : ''; ?>">
+                    <?php echo $message; ?>
+                </div>
+            <?php endif; ?>
 
-            <div class="container">
-                <?php if ($message): 
-                    $isError = strpos($message, 'Error:') !== false || strpos($message, 'Failed') !== false;
-                ?>
-                    <div class="message <?php echo $isError ? 'error' : ''; ?>">
-                        <?php echo $message; ?>
-                    </div>
-                <?php endif; ?>
-
-                <div class="section">
-                    <h2>
-                        All Users
-                        <button class="btn-create" onclick="openModal()">+ Create New User</button>
-                    </h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Name</th>
-                        <th>Email</th>
-                        <th>Phone</th>
-                        <th>Created</th>
-                        <th>Role</th>
-                        <th>Status</th>
-                         <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (empty($users)): ?>
+            <div class="section">
+                <h2>
+                    All Users
+                    <button class="btn-create" onclick="openModal()">+ Create New User</button>
+                </h2>
+                <table>
+                    <thead>
                         <tr>
-                            <td colspan="8" style="text-align: center; color: #666;">No users found.</td>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Created</th>
+                            <th>Role</th>
+                            <th>Status</th>
+                            <th>Action</th>
                         </tr>
-                    <?php else: ?>
-                        <?php foreach ($users as $user): ?>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($users)): ?>
                             <tr>
-                                <td><?php echo $user['id']; ?></td>
-                                <td>
-                                    <div class="user-name"><?php echo htmlspecialchars(getFullName($user)); ?></div>
-                                    <div class="user-info">@<?php echo htmlspecialchars($user['username']); ?></div>
-                                </td>
-                                <td><?php echo htmlspecialchars($user['email']); ?></td>
-                                <td><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></td>
-
-                              
-                                <td><?php echo date('Y-m-d', strtotime($user['created_at'])); ?></td>
-                                <td>
-                                    <div class="actions-wrap">
-                                      
+                                <td colspan="8" style="text-align: center; color: #94a3b8;">No users found.</td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($users as $user): ?>
+                                <tr>
+                                    <td><?php echo $user['id']; ?></td>
+                                    <td>
+                                        <div class="user-name"><?php echo htmlspecialchars(getFullName($user)); ?></div>
+                                        <div class="user-info">@<?php echo htmlspecialchars($user['username']); ?></div>
+                                    </td>
+                                    <td><?php echo htmlspecialchars($user['email']); ?></td>
+                                    <td><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></td>
+                                    <td><?php echo date('Y-m-d', strtotime($user['created_at'])); ?></td>
+                                    <td>
                                         <form method="POST" class="inline-form">
                                             <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
                                             <select name="role">
@@ -531,12 +912,11 @@ $statuses = ['active', 'inactive'];
                                                     </option>
                                                 <?php endforeach; ?>
                                             </select>
-                                            <button type="submit" name="action" value="update_role" ><i class="fa-solid fa-pen-to-square"></i></button>
+                                            <button type="submit" name="action" value="update_role" style="background:#dbeafe; color:#1d4ed8; padding:6px 12px;"><i class="fa-solid fa-pen-to-square"></i></button>
                                         </form>
-                                       
-                                    </div>
-                                <td>
-                                     <form method="POST" class="inline-form">
+                                    </td>
+                                    <td>
+                                        <form method="POST" class="inline-form">
                                             <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
                                             <select name="status">
                                                 <?php foreach ($statuses as $status): ?>
@@ -545,171 +925,67 @@ $statuses = ['active', 'inactive'];
                                                     </option>
                                                 <?php endforeach; ?>
                                             </select>
-                                            <button type="submit" name="action" value="update_status"><i class="fa-solid fa-pen-to-square"></i></button>
+                                            <button type="submit" name="action" value="update_status" style="background:#dbeafe; color:#1d4ed8; padding:6px 12px;"><i class="fa-solid fa-pen-to-square"></i></button>
                                         </form>
-                                        
-                                </td>
-                                <td>
-                                      <button onclick="openProfile('<?php echo rawurlencode(json_encode($user)); ?>')" ><i class="fa-solid fa-eye"></i></button>
-                                </td>
-                                    
-                                    <!-- Profile Details -->
-                                    <div id="profile-<?php echo $user['id']; ?>" class="profile-details">
-                                        <h4>Full Profile</h4>
-                                        <div class="detail-row">
-                                            <span class="label">Full Name:</span>
-                                            <span><?php echo htmlspecialchars(getFullName($user)); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">First Name:</span>
-                                            <span><?php echo htmlspecialchars($user['firstname']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Middle Name:</span>
-                                            <span><?php echo htmlspecialchars($user['middlename'] ?? 'N/A'); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Last Name:</span>
-                                            <span><?php echo htmlspecialchars($user['lastname']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Suffix:</span>
-                                            <span><?php echo htmlspecialchars($user['suffix'] ?? 'N/A'); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Phone:</span>
-                                            <span><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Address:</span>
-                                            <span><?php echo htmlspecialchars($user['address'] ?? 'N/A'); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Birthdate:</span>
-                                            <span><?php echo formatDate($user['birthdate']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Username:</span>
-                                            <span><?php echo htmlspecialchars($user['username']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Email:</span>
-                                            <span><?php echo htmlspecialchars($user['email']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Role:</span>
-                                            <span><?php echo getRoleDisplayName($user['role']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Status:</span>
-                                            <span><?php echo ucfirst($user['status']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Created:</span>
-                                            <span><?php echo date('F d, Y H:i', strtotime($user['created_at'])); ?></span>
-                                        </div>
-                                    </div>
-                                </td>
+                                    </td>
+                                    <td>
+                                        <button onclick="openProfile('<?php echo rawurlencode(json_encode($user)); ?>')" style="background:#e0e7ff; color:#4338ca; padding:6px 12px; border-radius:6px; font-size:14px;"><i class="fa-solid fa-eye"></i></button>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section pending-section">
+                <h2>Pending Approvals</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Registered</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($pendingUsers)): ?>
+                            <tr>
+                                <td colspan="6" style="text-align: center; color: #94a3b8;">No pending registrations.</td>
                             </tr>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </tbody>
-            </table>
+                        <?php else: ?>
+                            <?php foreach ($pendingUsers as $user): ?>
+                                <tr>
+                                    <td><?php echo $user['id']; ?></td>
+                                    <td>
+                                        <div class="user-name"><?php echo htmlspecialchars(getFullName($user)); ?></div>
+                                        <div class="user-info">@<?php echo htmlspecialchars($user['username']); ?></div>
+                                    </td>
+                                    <td><?php echo htmlspecialchars($user['email']); ?></td>
+                                    <td><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></td>
+                                    <td><?php echo date('Y-m-d H:i', strtotime($user['created_at'])); ?></td>
+                                    <td>
+                                        <div class="actions-wrap">
+                                            <form method="POST" class="inline-form">
+                                                <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
+                                                <button type="submit" name="action" value="approve_user" class="btn-success" style="padding:6px 14px;">Approve</button>
+                                                <button type="submit" name="action" value="decline_user" class="btn-danger" style="padding:6px 14px;">Decline</button>
+                                            </form>
+                                            <button onclick="openProfile('<?php echo rawurlencode(json_encode($user)); ?>')" class="edit-profile-btn" style="padding:6px 12px;">View</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
-        <div class="section pending-section">
-            <h2>Pending Approvals</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Name</th>
-                        <th>Email</th>
-                        <th>Phone</th>
-                        <th>Registered</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (empty($pendingUsers)): ?>
-                        <tr>
-                            <td colspan="6" style="text-align: center; color: #666;">No pending registrations.</td>
-                        </tr>
-                    <?php else: ?>
-                        <?php foreach ($pendingUsers as $user): ?>
-                            <tr>
-                                <td><?php echo $user['id']; ?></td>
-                                <td>
-                                    <div class="user-name"><?php echo htmlspecialchars(getFullName($user)); ?></div>
-                                    <div class="user-info">@<?php echo htmlspecialchars($user['username']); ?></div>
-                                </td>
-                                <td><?php echo htmlspecialchars($user['email']); ?></td>
-                                <td><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></td>
-                                <td><?php echo date('Y-m-d H:i', strtotime($user['created_at'])); ?></td>
-                                <td>
-                                    <div class="actions-wrap">
-                                        <form method="POST" class="inline-form">
-                                            <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
-                                            <button type="submit" name="action" value="approve_user" class="btn-success">Approve</button>
-                                            <button type="submit" name="action" value="decline_user" class="btn-danger">Decline</button>
-                                        </form>
-                                        <button onclick="openProfile('<?php echo rawurlencode(json_encode($user)); ?>')" class="edit-profile-btn">View Details</button>
-                                    </div>
-                                    
-                                    <!-- Profile Details for Pending Users -->
-                                    <div id="profile-<?php echo $user['id']; ?>" class="profile-details">
-                                        <h4>Registration Details</h4>
-                                        <div class="detail-row">
-                                            <span class="label">Full Name:</span>
-                                            <span><?php echo htmlspecialchars(getFullName($user)); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">First Name:</span>
-                                            <span><?php echo htmlspecialchars($user['firstname']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Middle Name:</span>
-                                            <span><?php echo htmlspecialchars($user['middlename'] ?? 'N/A'); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Last Name:</span>
-                                            <span><?php echo htmlspecialchars($user['lastname']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Suffix:</span>
-                                            <span><?php echo htmlspecialchars($user['suffix'] ?? 'N/A'); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Phone:</span>
-                                            <span><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Address:</span>
-                                            <span><?php echo htmlspecialchars($user['address'] ?? 'N/A'); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Birthdate:</span>
-                                            <span><?php echo formatDate($user['birthdate']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Email:</span>
-                                            <span><?php echo htmlspecialchars($user['email']); ?></span>
-                                        </div>
-                                        <div class="detail-row">
-                                            <span class="label">Username:</span>
-                                            <span><?php echo htmlspecialchars($user['username']); ?></span>
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
-            </div>
-        </main>
-    </div>
+    </main>
 
     <!-- Create User Modal -->
     <div id="createUserModal" class="modal">
@@ -722,8 +998,7 @@ $statuses = ['active', 'inactive'];
             <form method="POST" action="">
                 <input type="hidden" name="action" value="create_user">
                 
-                <!-- Account Information -->
-                <h3 style="color: #2c3e50; margin-bottom: 15px; font-size: 16px;">Account Information</h3>
+                <h3 style="color: #0f172a; margin-bottom: 15px; font-size: 16px;">Account Information</h3>
                 <div class="form-row">
                     <div class="form-group">
                         <label for="username">Username <span class="required">*</span></label>
@@ -740,7 +1015,7 @@ $statuses = ['active', 'inactive'];
                         <label for="password">Password <span class="required">*</span></label>
                         <input type="password" id="password" name="password" required>
                         <div class="password-actions">
-                            <button type="button" onclick="generatePassword()">Generate Password</button>
+                            <button type="button" onclick="generatePassword()">Generate</button>
                             <button type="button" onclick="togglePasswordVisibility()">Show/Hide</button>
                         </div>
                     </div>
@@ -750,8 +1025,7 @@ $statuses = ['active', 'inactive'];
                     </div>
                 </div>
                 
-                <!-- Personal Information -->
-                <h3 style="color: #2c3e50; margin: 20px 0 15px 0; font-size: 16px;">Personal Information</h3>
+                <h3 style="color: #0f172a; margin: 20px 0 15px 0; font-size: 16px;">Personal Information</h3>
                 <div class="form-row">
                     <div class="form-group">
                         <label for="firstname">First Name <span class="required">*</span></label>
@@ -790,8 +1064,7 @@ $statuses = ['active', 'inactive'];
                     <textarea id="address" name="address" rows="2"></textarea>
                 </div>
                 
-                <!-- Role and Status -->
-                <h3 style="color: #2c3e50; margin: 20px 0 15px 0; font-size: 16px;">Role & Status</h3>
+                <h3 style="color: #0f172a; margin: 20px 0 15px 0; font-size: 16px;">Role & Status</h3>
                 <div class="form-row">
                     <div class="form-group">
                         <label for="role">Role <span class="required">*</span></label>
@@ -817,14 +1090,15 @@ $statuses = ['active', 'inactive'];
         </div>
     </div>
     
-    <!-- Profile Sidebar Overlay + Panel -->
+    <!-- Profile Sidebar -->
     <div id="profileSidebarOverlay" class="profile-sidebar-overlay"></div>
-    <aside id="profileSidebar" aria-hidden="true">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
+    <aside id="profileSidebar">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <div></div>
             <button class="modal-close" onclick="closeProfile()">&times;</button>
         </div>
-        <div id="profileSidebarContent" style="margin-top:10px;"></div>
+        <div id="profileSidebarContent"></div>
     </aside>
+
 </body>
 </html>
