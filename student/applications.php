@@ -180,6 +180,8 @@ function getApplicationStatusBadgeClass($status)
             height: 100vh;
             padding: 24px 18px 20px;
             flex-shrink: 0;
+            overflow-y: auto;
+            transition: transform 0.3s ease;
         }
 
         .sidebar-brand {
@@ -269,12 +271,33 @@ function getApplicationStatusBadgeClass($status)
             color: #f1f5f9;
         }
 
+        /* Mobile hamburger menu button */
+        .mobile-menu-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: #f8fafc;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 8px;
+        }
+
+        /* Sidebar overlay for mobile */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 998;
+        }
+
         /* ----- MAIN CONTENT ----- */
         .main-content {
             flex: 1;
             padding: 0 32px 32px 32px;
             display: flex;
             flex-direction: column;
+            min-width: 0;
         }
 
         /* ----- NEW TOP HEADER (blue theme matching sidebar, full width) ----- */
@@ -294,6 +317,8 @@ function getApplicationStatusBadgeClass($status)
             display: flex;
             align-items: center;
             gap: 16px;
+            flex: 1;
+            min-width: 0;
         }
 
         .header-left h1 {
@@ -301,24 +326,27 @@ function getApplicationStatusBadgeClass($status)
             font-weight: 700;
             color: #f8fafc;
             letter-spacing: -0.3px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
         }
 
         .header-left h1 small {
             font-weight: 400;
             font-size: 0.85rem;
             color: #94a3b8;
-            margin-left: 8px;
         }
 
         .header-left h1 i {
             color: #38bdf8;
-            margin-right: 8px;
         }
 
         .header-right {
             display: flex;
             align-items: center;
             gap: 20px;
+            flex-shrink: 0;
         }
 
         /* Notification bell - light version for dark header */
@@ -336,6 +364,7 @@ function getApplicationStatusBadgeClass($status)
             transition: 0.15s;
             cursor: pointer;
             border: none;
+            flex-shrink: 0;
         }
 
         .notif-bell:hover {
@@ -371,6 +400,7 @@ function getApplicationStatusBadgeClass($status)
             border: 1px solid rgba(255,255,255,0.12);
             cursor: default;
             backdrop-filter: blur(2px);
+            flex-shrink: 0;
         }
 
         .user-avatar {
@@ -409,6 +439,7 @@ function getApplicationStatusBadgeClass($status)
             box-shadow: 0 4px 20px rgba(0,0,0,0.02);
             border: 1px solid #eef2f7;
             flex: 1;
+            min-width: 0;
         }
 
         .page-head {
@@ -441,24 +472,51 @@ function getApplicationStatusBadgeClass($status)
             border: 1px solid #dbeafe;
             font-size: 0.85rem;
             font-weight: 600;
+            white-space: nowrap;
         }
 
+        /* ===== TABLE WITH VERTICAL SCROLL ONLY ===== */
         .table-wrap {
-            overflow-x: auto;
+            overflow-y: auto;
+            overflow-x: hidden;
             border: 1px solid #e2e8f0;
             border-radius: 16px;
             background: #fff;
             margin-top: 16px;
+            -webkit-overflow-scrolling: touch;
+            max-height: 500px;
+        }
+
+        /* Vertical scrollbar styling */
+        .table-wrap::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .table-wrap::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 4px;
+        }
+
+        .table-wrap::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+
+        .table-wrap::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
         }
 
         .table-header-reminder {
             display: flex;
-            justify-content: space-between;
+            justify-content: flex-end;
             align-items: center;
             padding: 12px 16px;
             background: #fefce8;
             border-bottom: 2px solid #fef08a;
             border-radius: 16px 16px 0 0;
+            position: sticky;
+            top: 0;
+            z-index: 5;
         }
 
         .table-header-reminder .reminder-text {
@@ -478,12 +536,15 @@ function getApplicationStatusBadgeClass($status)
         .app-table {
             width: 100%;
             border-collapse: collapse;
-            min-width: 1200px;
+            table-layout: fixed;
         }
 
         .app-table thead {
             background: #f8fafc;
             border-bottom: 2px solid #e2e8f0;
+            position: sticky;
+            top: 0;
+            z-index: 10;
         }
 
         .app-table th {
@@ -493,7 +554,9 @@ function getApplicationStatusBadgeClass($status)
             font-size: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 0.4px;
-            white-space: nowrap;
+            white-space: normal;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .app-table td {
@@ -501,6 +564,44 @@ function getApplicationStatusBadgeClass($status)
             border-bottom: 1px solid #f1f5f9;
             vertical-align: top;
             color: #1e293b;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        /* Column widths */
+        .app-table th:nth-child(1),
+        .app-table td:nth-child(1) {
+            width: 15%;
+        }
+
+        .app-table th:nth-child(2),
+        .app-table td:nth-child(2) {
+            width: 20%;
+        }
+
+        .app-table th:nth-child(3),
+        .app-table td:nth-child(3) {
+            width: 15%;
+        }
+
+        .app-table th:nth-child(4),
+        .app-table td:nth-child(4) {
+            width: 12%;
+        }
+
+        .app-table th:nth-child(5),
+        .app-table td:nth-child(5) {
+            width: 13%;
+        }
+
+        .app-table th:nth-child(6),
+        .app-table td:nth-child(6) {
+            width: 12%;
+        }
+
+        .app-table th:nth-child(7),
+        .app-table td:nth-child(7) {
+            width: 13%;
         }
 
         .app-table tbody tr:hover {
@@ -593,7 +694,7 @@ function getApplicationStatusBadgeClass($status)
             margin-bottom: 10px;
         }
 
-        /* ----- MODAL (unchanged) ----- */
+        /* ----- MODAL ----- */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -615,6 +716,7 @@ function getApplicationStatusBadgeClass($status)
             box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2);
             overflow: hidden;
             animation: modalSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            margin: auto;
         }
 
         @keyframes modalSlideUp {
@@ -641,6 +743,7 @@ function getApplicationStatusBadgeClass($status)
             margin: 0;
             font-size: 1.2rem;
             color: #0f172a;
+            word-break: break-word;
         }
 
         .modal-close-btn {
@@ -651,6 +754,7 @@ function getApplicationStatusBadgeClass($status)
             border-radius: 50%;
             color: #64748b;
             cursor: pointer;
+            flex-shrink: 0;
         }
 
         .modal-body {
@@ -687,6 +791,7 @@ function getApplicationStatusBadgeClass($status)
             color: #0f172a;
             font-weight: 600;
             line-height: 1.5;
+            word-break: break-word;
         }
 
         .detail-block {
@@ -704,6 +809,7 @@ function getApplicationStatusBadgeClass($status)
             color: #334155;
             line-height: 1.7;
             white-space: pre-wrap;
+            word-break: break-word;
         }
 
         .modal-footer {
@@ -742,26 +848,482 @@ function getApplicationStatusBadgeClass($status)
             cursor: not-allowed;
         }
 
-        @media (max-width: 720px) {
+        /* ===== RESPONSIVE BREAKPOINTS ===== */
+
+        /* Tablets and smaller screens */
+        @media (max-width: 1024px) {
+            .main-content {
+                padding: 0 20px 20px 20px;
+            }
+
+            .top-header {
+                padding: 14px 20px;
+                margin: 0 -20px 20px -20px;
+            }
+
+            .page-card {
+                padding: 20px;
+            }
+
+            .app-table th:nth-child(1),
+            .app-table td:nth-child(1) {
+                width: 14%;
+            }
+
+            .app-table th:nth-child(2),
+            .app-table td:nth-child(2) {
+                width: 18%;
+            }
+
+            .app-table th:nth-child(3),
+            .app-table td:nth-child(3) {
+                width: 14%;
+            }
+
+            .app-table th:nth-child(4),
+            .app-table td:nth-child(4) {
+                width: 11%;
+            }
+
+            .app-table th:nth-child(5),
+            .app-table td:nth-child(5) {
+                width: 13%;
+            }
+
+            .app-table th:nth-child(6),
+            .app-table td:nth-child(6) {
+                width: 14%;
+            }
+
+            .app-table th:nth-child(7),
+            .app-table td:nth-child(7) {
+                width: 16%;
+            }
+        }
+
+        /* Mobile landscape and tablets */
+        @media (max-width: 768px) {
+            .mobile-menu-toggle {
+                display: block;
+            }
+
+            .sidebar {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 280px;
+                height: 100vh;
+                z-index: 999;
+                transform: translateX(-100%);
+                box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .sidebar-overlay.show {
+                display: block;
+            }
+
+            .main-content {
+                padding: 0 16px 16px 16px;
+            }
+
+            .top-header {
+                padding: 12px 16px;
+                margin: 0 -16px 16px -16px;
+                flex-wrap: wrap;
+            }
+
+            .header-left {
+                gap: 12px;
+            }
+
+            .header-left h1 {
+                font-size: 1.1rem;
+            }
+
+            .header-left h1 small {
+                font-size: 0.7rem;
+            }
+
+            .header-right {
+                gap: 12px;
+            }
+
+            .user-profile {
+                padding: 3px 12px 3px 4px;
+            }
+
+            .user-avatar {
+                width: 34px;
+                height: 34px;
+                font-size: 0.8rem;
+            }
+
+            .user-info .name {
+                font-size: 0.8rem;
+            }
+
+            .user-info .role-label {
+                font-size: 0.6rem;
+            }
+
+            .notif-bell {
+                width: 38px;
+                height: 38px;
+                font-size: 1.1rem;
+            }
+
+            .notif-badge {
+                width: 18px;
+                height: 18px;
+                font-size: 0.5rem;
+            }
+
+            .page-card {
+                padding: 16px;
+                border-radius: 16px;
+            }
+
+            .page-head h2 {
+                font-size: 1rem;
+            }
+
+            .page-head p {
+                font-size: 0.8rem;
+            }
+
+            .notice-pill {
+                font-size: 0.75rem;
+                padding: 6px 12px;
+            }
+
+            .table-wrap {
+                max-height: 350px;
+                border-radius: 12px;
+            }
+
+            .table-header-reminder {
+                justify-content: center;
+                padding: 10px 12px;
+            }
+
+            .table-header-reminder .reminder-text {
+                font-size: 0.7rem;
+                text-align: center;
+            }
+
+            .app-table th,
+            .app-table td {
+                padding: 8px 10px;
+                font-size: 0.7rem;
+            }
+
+            .app-table th:nth-child(1),
+            .app-table td:nth-child(1) {
+                width: 13%;
+            }
+
+            .app-table th:nth-child(2),
+            .app-table td:nth-child(2) {
+                width: 17%;
+            }
+
+            .app-table th:nth-child(3),
+            .app-table td:nth-child(3) {
+                width: 13%;
+            }
+
+            .app-table th:nth-child(4),
+            .app-table td:nth-child(4) {
+                width: 10%;
+            }
+
+            .app-table th:nth-child(5),
+            .app-table td:nth-child(5) {
+                width: 12%;
+            }
+
+            .app-table th:nth-child(6),
+            .app-table td:nth-child(6) {
+                width: 15%;
+            }
+
+            .app-table th:nth-child(7),
+            .app-table td:nth-child(7) {
+                width: 20%;
+            }
+
+            .btn-action {
+                font-size: 0.65rem;
+                padding: 5px 8px;
+            }
+
+            .status-badge {
+                font-size: 0.65rem;
+                padding: 2px 6px;
+            }
+
             .detail-grid {
                 grid-template-columns: 1fr;
             }
-            .top-header {
-                flex-direction: column;
-                align-items: stretch;
-                padding: 12px 16px;
-                margin: 0 -16px 16px -16px;
+
+            .modal-container {
+                margin: 10px;
+                max-width: 100%;
+                border-radius: 16px;
             }
-            .header-right {
-                justify-content: flex-start;
+
+            .modal-header,
+            .modal-footer {
+                padding: 14px 16px;
+            }
+
+            .modal-body {
+                padding: 16px;
+                max-height: calc(80vh - 120px);
+            }
+
+            .detail-card {
+                padding: 12px;
+            }
+        }
+
+        /* Small mobile phones */
+        @media (max-width: 480px) {
+            .sidebar {
+                width: 100%;
+                max-width: 300px;
+            }
+
+            .top-header {
+                padding: 10px 12px;
+                margin: 0 -12px 12px -12px;
+                gap: 8px;
+            }
+
+            .header-left h1 {
+                font-size: 0.95rem;
+            }
+
+            .header-left h1 small {
+                font-size: 0.6rem;
+            }
+
+            .user-profile {
+                padding: 2px 8px 2px 3px;
+            }
+
+            .user-avatar {
+                width: 28px;
+                height: 28px;
+                font-size: 0.7rem;
+            }
+
+            .user-info .name {
+                font-size: 0.7rem;
+            }
+
+            .user-info .role-label {
+                display: none;
+            }
+
+            .notif-bell {
+                width: 32px;
+                height: 32px;
+                font-size: 0.95rem;
+            }
+
+            .notif-badge {
+                width: 16px;
+                height: 16px;
+                font-size: 0.45rem;
+                top: -4px;
+                right: -4px;
+            }
+
+            .page-card {
+                padding: 12px;
+                border-radius: 12px;
+            }
+
+            .page-head {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .notice-pill {
+                font-size: 0.7rem;
+                padding: 4px 10px;
+                white-space: normal;
+            }
+
+            .table-wrap {
+                max-height: 300px;
+                border-radius: 12px;
+            }
+
+            .table-header-reminder {
+                padding: 8px 10px;
+            }
+
+            .table-header-reminder .reminder-text {
+                font-size: 0.65rem;
+            }
+
+            .app-table th,
+            .app-table td {
+                padding: 6px 8px;
+                font-size: 0.65rem;
+            }
+
+            .app-table th:nth-child(1),
+            .app-table td:nth-child(1) {
+                width: 12%;
+            }
+
+            .app-table th:nth-child(2),
+            .app-table td:nth-child(2) {
+                width: 16%;
+            }
+
+            .app-table th:nth-child(3),
+            .app-table td:nth-child(3) {
+                width: 12%;
+            }
+
+            .app-table th:nth-child(4),
+            .app-table td:nth-child(4) {
+                width: 10%;
+            }
+
+            .app-table th:nth-child(5),
+            .app-table td:nth-child(5) {
+                width: 12%;
+            }
+
+            .app-table th:nth-child(6),
+            .app-table td:nth-child(6) {
+                width: 16%;
+            }
+
+            .app-table th:nth-child(7),
+            .app-table td:nth-child(7) {
+                width: 22%;
+            }
+
+            .btn-action {
+                font-size: 0.6rem;
+                padding: 4px 6px;
+            }
+
+            .status-badge {
+                font-size: 0.6rem;
+                padding: 2px 5px;
+            }
+
+            .modal-container {
+                margin: 8px;
+                border-radius: 12px;
+            }
+
+            .modal-header h3 {
+                font-size: 1rem;
+            }
+
+            .modal-body {
+                padding: 12px;
+            }
+
+            .detail-card {
+                padding: 10px;
+            }
+
+            .detail-card label {
+                font-size: 0.65rem;
+            }
+
+            .detail-card .value {
+                font-size: 0.85rem;
+            }
+
+            .btn-primary,
+            .btn-secondary {
+                padding: 8px 14px;
+                font-size: 0.85rem;
+                width: 100%;
+                justify-content: center;
+            }
+
+            .modal-footer {
+                flex-direction: column-reverse;
+            }
+        }
+
+        /* Very small screens */
+        @media (max-width: 360px) {
+            .header-left h1 {
+                font-size: 0.8rem;
+            }
+
+            .user-avatar {
+                width: 24px;
+                height: 24px;
+                font-size: 0.6rem;
+            }
+
+            .user-info .name {
+                font-size: 0.65rem;
+            }
+
+            .notif-bell {
+                width: 28px;
+                height: 28px;
+                font-size: 0.8rem;
+            }
+
+            .notif-badge {
+                width: 14px;
+                height: 14px;
+                font-size: 0.4rem;
+            }
+
+            .table-wrap {
+                max-height: 250px;
+            }
+
+            .app-table th,
+            .app-table td {
+                padding: 4px 6px;
+                font-size: 0.6rem;
+            }
+
+            .app-table th:nth-child(6),
+            .app-table td:nth-child(6) {
+                width: 18%;
+            }
+
+            .app-table th:nth-child(7),
+            .app-table td:nth-child(7) {
+                width: 24%;
+            }
+
+            .btn-action {
+                font-size: 0.55rem;
+                padding: 3px 5px;
             }
         }
     </style>
 </head>
 <body>
     <div class="app-shell">
+        <!-- Sidebar Overlay for mobile -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
         <!-- SIDEBAR (without user chip) -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
                 <i class="fa-solid fa-graduation-cap"></i>
                 <h2>RBAC<span>Student Portal</span></h2>
@@ -782,6 +1344,9 @@ function getApplicationStatusBadgeClass($status)
             <!-- NEW HEADER: full width, no rounded corners, matching sidebar -->
             <div class="top-header">
                 <div class="header-left">
+                    <button class="mobile-menu-toggle" id="menuToggle" aria-label="Toggle menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
                     <h1>
                         <i class="fa-solid fa-file-lines"></i>
                         My Applications
@@ -848,7 +1413,6 @@ function getApplicationStatusBadgeClass($status)
                 <?php if (count($myApplications) > 0): ?>
                     <div class="table-wrap">
                         <div class="table-header-reminder">
-                            <div></div>
                             <div class="reminder-text">
                                 <i class="fa-solid fa-lightbulb"></i>
                                 Note: You can only commit if the supervisor accepts your application
@@ -894,7 +1458,7 @@ function getApplicationStatusBadgeClass($status)
                                                 class="btn-action btn-view"
                                                 onclick="openApplicationModal(<?php echo (int)$application['application_id']; ?>)"
                                             >
-                                                <i class="fa-solid fa-eye"></i> View Details
+                                                <i class="fa-solid fa-eye"></i> View
                                             </button>
                                         </td>
                                         <td>
@@ -923,7 +1487,7 @@ function getApplicationStatusBadgeClass($status)
         </main>
     </div>
 
-    <!-- MODAL (unchanged) -->
+    <!-- MODAL -->
     <div class="modal-overlay" id="applicationModal">
         <div class="modal-container">
             <div class="modal-header">
@@ -980,6 +1544,45 @@ function getApplicationStatusBadgeClass($status)
         const commitForm = document.getElementById('commitForm');
         const commitApplicationId = document.getElementById('commitApplicationId');
 
+        // Mobile menu toggle
+        const sidebar = document.getElementById('sidebar');
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+        function toggleSidebar() {
+            sidebar.classList.toggle('open');
+            sidebarOverlay.classList.toggle('show');
+            document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
+        }
+
+        function closeSidebar() {
+            sidebar.classList.remove('open');
+            sidebarOverlay.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+
+        if (menuToggle) {
+            menuToggle.addEventListener('click', toggleSidebar);
+        }
+
+        if (sidebarOverlay) {
+            sidebarOverlay.addEventListener('click', closeSidebar);
+        }
+
+        // Close sidebar on escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+
+        // Close sidebar on window resize if screen becomes larger
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+
         function openApplicationModal(applicationId) {
             const data = applicationMap[applicationId];
             if (!data) {
@@ -1013,10 +1616,12 @@ function getApplicationStatusBadgeClass($status)
             }
 
             modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
         }
 
         function closeApplicationModal() {
             modal.style.display = 'none';
+            document.body.style.overflow = '';
         }
 
         modal.addEventListener('click', function (event) {
@@ -1028,6 +1633,9 @@ function getApplicationStatusBadgeClass($status)
         document.addEventListener('keydown', function (event) {
             if (event.key === 'Escape') {
                 closeApplicationModal();
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
             }
         });
     </script>

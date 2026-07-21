@@ -6,11 +6,12 @@
  * Ensure the notifications table exists (auto-migration).
  */
 function ensureNotificationsTable($pdo) {
+    // Create the table with a broad VARCHAR type to avoid ALTER issues
     $pdo->exec(<<<'SQL'
         CREATE TABLE IF NOT EXISTS notifications (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id INT NOT NULL,
-            type ENUM('application_accepted', 'application_rejected', 'new_application', 'student_committed') NOT NULL,
+            type VARCHAR(64) NOT NULL,
             message TEXT NOT NULL,
             link VARCHAR(255) DEFAULT NULL,
             is_read TINYINT(1) DEFAULT 0,
@@ -22,6 +23,14 @@ function ensureNotificationsTable($pdo) {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 SQL
     );
+
+    // If the table already existed with an ENUM column, migrate it to VARCHAR
+    try {
+        $col = $pdo->query("SHOW COLUMNS FROM notifications LIKE 'type'")->fetch(PDO::FETCH_ASSOC);
+        if ($col && stripos($col['Type'], 'enum') !== false) {
+            $pdo->exec("ALTER TABLE notifications MODIFY type VARCHAR(64) NOT NULL");
+        }
+    } catch (Exception $e) { /* ignore */ }
 }
 
 /**
@@ -157,10 +166,17 @@ function renderNotifDropdown($notifications) {
  */
 function notifIcon($type) {
     $icons = [
-        'application_accepted' => 'fa-solid fa-circle-check',
-        'application_rejected' => 'fa-solid fa-circle-xmark',
-        'new_application' => 'fa-solid fa-file-circle-plus',
-        'student_committed' => 'fa-solid fa-handshake',
+        'application_accepted'     => 'fa-solid fa-circle-check',
+        'application_rejected'     => 'fa-solid fa-circle-xmark',
+        'new_application'          => 'fa-solid fa-file-circle-plus',
+        'student_committed'        => 'fa-solid fa-handshake',
+        'dpr_submitted'            => 'fa-solid fa-clipboard-check',
+        'late_submission'          => 'fa-solid fa-clock-rotate-left',
+        'bulk_submission_anomaly'  => 'fa-solid fa-triangle-exclamation',
+        'at_risk'                  => 'fa-solid fa-circle-exclamation',
+        'top_performer'            => 'fa-solid fa-star',
+        'dpr_deadline'             => 'fa-solid fa-calendar-xmark',
+        'dss_update'               => 'fa-solid fa-chart-line',
     ];
     return $icons[$type] ?? 'fa-solid fa-bell';
 }
@@ -170,17 +186,254 @@ function notifIcon($type) {
  */
 function notifIconColor($type) {
     $colors = [
-        'application_accepted' => '#16a34a',
-        'application_rejected' => '#dc2626',
-        'new_application' => '#2563eb',
-        'student_committed' => '#7c3aed',
+        'application_accepted'     => '#16a34a',
+        'application_rejected'     => '#dc2626',
+        'new_application'          => '#2563eb',
+        'student_committed'        => '#7c3aed',
+        'dpr_submitted'            => '#0891b2',
+        'late_submission'          => '#d97706',
+        'bulk_submission_anomaly'  => '#dc2626',
+        'at_risk'                  => '#ea580c',
+        'top_performer'            => '#ca8a04',
+        'dpr_deadline'             => '#9333ea',
+        'dss_update'               => '#0284c7',
     ];
     return $colors[$type] ?? '#64748b';
 }
 
 /**
- * Human-readable relative time.
+ * Notify all coordinators about an event.
+ * Returns the number of notifications created.
  */
+function notifyCoordinators($pdo, $type, $message, $link = null) {
+    $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'coordinator' AND status = 'active'");
+    $stmt->execute();
+    $coordinators = $stmt->fetchAll();
+    foreach ($coordinators as $c) {
+        createNotification($pdo, (int)$c['id'], $type, $message, $link);
+    }
+    return count($coordinators);
+}
+
+/**
+ * Notify all admins about an event.
+ */
+function notifyAdmins($pdo, $type, $message, $link = null) {
+    $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'admin' AND status = 'active'");
+    $stmt->execute();
+    $admins = $stmt->fetchAll();
+    foreach ($admins as $a) {
+        createNotification($pdo, (int)$a['id'], $type, $message, $link);
+    }
+    return count($admins);
+}
+
+/**
+ * Run Submission Velocity Metric (Mv) anomaly detection for a student.
+ *
+ * Detection window  : 1 hour  (short_window_minutes)
+ * Velocity threshold: 3 DPRs submitted within the window
+ * Span threshold    : span of report_date values must cover >= 3 days
+ *
+ * If both conditions are met, record a BULK_SUBMISSION_ANOMALY flag and send
+ * notifications to coordinators and admins.
+ *
+ * @return bool  true if anomaly was newly flagged
+ */
+function checkMvAnomaly($pdo, $studentId, $studentName) {
+    $shortWindowMinutes = 60;
+    $velocityThreshold  = 3;
+    $spanDaysThreshold  = 3;
+
+    // Count DPRs submitted within the last $shortWindowMinutes
+    $stmt = $pdo->prepare("
+        SELECT report_date
+        FROM daily_progress_reports
+        WHERE user_id = ?
+          AND submitted_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+        ORDER BY report_date ASC
+    ");
+    $stmt->execute([$studentId, $shortWindowMinutes]);
+    $recent = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+    if (count($recent) < $velocityThreshold) {
+        return false;
+    }
+
+    // Calculate span of report dates covered by the burst
+    $dates  = array_unique($recent);
+    sort($dates);
+    $first  = new DateTime($dates[0]);
+    $last   = new DateTime(end($dates));
+    $span   = (int)$first->diff($last)->days;
+
+    if ($span < $spanDaysThreshold) {
+        return false;
+    }
+
+    // Check we haven't already flagged this burst (no unresolved flag in last 2 hours)
+    $dupStmt = $pdo->prepare("
+        SELECT id FROM dpr_anomaly_flags
+        WHERE student_id = ?
+          AND flag_type   = 'BULK_SUBMISSION_ANOMALY'
+          AND is_resolved = 0
+          AND flagged_at >= DATE_SUB(NOW(), INTERVAL 2 HOUR)
+        LIMIT 1
+    ");
+    $dupStmt->execute([$studentId]);
+    if ($dupStmt->fetch()) {
+        return false; // Already flagged recently
+    }
+
+    $details = sprintf(
+        '%d DPRs submitted within %d minutes covering %d days (%s → %s)',
+        count($recent),
+        $shortWindowMinutes,
+        $span,
+        $dates[0],
+        end($dates)
+    );
+
+    $pdo->prepare("
+        INSERT INTO dpr_anomaly_flags (student_id, flag_type, details)
+        VALUES (?, 'BULK_SUBMISSION_ANOMALY', ?)
+    ")->execute([$studentId, $details]);
+
+    $msg  = "Bulk submission anomaly detected for student {$studentName}: {$details}";
+    notifyCoordinators($pdo, 'bulk_submission_anomaly', $msg, '../coordinator/dpr_monitor.php');
+    notifyAdmins($pdo,       'bulk_submission_anomaly', $msg, null);
+
+    return true;
+}
+
+/**
+ * Check whether the DPR being submitted is late.
+ * "Late" means: the report_date is in the past AND submitted_at is after
+ * 23:59:59 of that report_date.
+ *
+ * @param string $reportDate  e.g. '2026-07-10'
+ * @param string $submittedAt e.g. '2026-07-12 14:30:00'
+ * @return bool
+ */
+function isLateSubmission($reportDate, $submittedAt) {
+    $deadline = new DateTime($reportDate . ' 23:59:59');
+    $submitted = new DateTime($submittedAt);
+    return $submitted > $deadline;
+}
+
+/**
+ * Record a LATE_SUBMISSION anomaly flag and notify student + coordinator.
+ */
+function flagLateSubmission($pdo, $studentId, $studentName, $reportDate, $submittedAt) {
+    $details = "DPR for {$reportDate} submitted at {$submittedAt} (after day deadline)";
+
+    // Avoid duplicate flags for the exact same report date
+    $dupStmt = $pdo->prepare("
+        SELECT id FROM dpr_anomaly_flags
+        WHERE student_id = ?
+          AND flag_type   = 'LATE_SUBMISSION'
+          AND details     LIKE ?
+        LIMIT 1
+    ");
+    $dupStmt->execute([$studentId, "%DPR for {$reportDate}%"]);
+    if ($dupStmt->fetch()) {
+        return; // Already flagged
+    }
+
+    $pdo->prepare("
+        INSERT INTO dpr_anomaly_flags (student_id, flag_type, details)
+        VALUES (?, 'LATE_SUBMISSION', ?)
+    ")->execute([$studentId, $details]);
+
+    // Notify the student
+    createNotification($pdo, $studentId, 'late_submission',
+        "Your DPR for {$reportDate} was recorded as a late submission.",
+        'dpr.php');
+
+    // Notify coordinators
+    notifyCoordinators($pdo, 'late_submission',
+        "Late DPR submission by {$studentName} for date {$reportDate}.",
+        '../coordinator/dpr_monitor.php');
+}
+
+/**
+ * Run DSS classification for a student and update dss_classifications table.
+ * Notifies student and coordinators when classification changes.
+ *
+ * Thresholds (configurable):
+ *  - AT_RISK      : late_count > 3  OR  anomaly_count > 0
+ *  - TOP_PERFORMER: late_count == 0 AND anomaly_count == 0 AND total_dprs >= 5
+ *  - NORMAL       : everything else
+ */
+function runDssClassification($pdo, $studentId, $studentName) {
+    // Count totals
+    $dprStmt = $pdo->prepare("SELECT COUNT(*) FROM daily_progress_reports WHERE user_id = ?");
+    $dprStmt->execute([$studentId]);
+    $totalDprs = (int)$dprStmt->fetchColumn();
+
+    $lateStmt = $pdo->prepare("
+        SELECT COUNT(*) FROM dpr_anomaly_flags
+        WHERE student_id = ? AND flag_type = 'LATE_SUBMISSION'
+    ");
+    $lateStmt->execute([$studentId]);
+    $lateCount = (int)$lateStmt->fetchColumn();
+
+    $anomalyStmt = $pdo->prepare("
+        SELECT COUNT(*) FROM dpr_anomaly_flags
+        WHERE student_id = ? AND flag_type = 'BULK_SUBMISSION_ANOMALY'
+    ");
+    $anomalyStmt->execute([$studentId]);
+    $anomalyCount = (int)$anomalyStmt->fetchColumn();
+
+    // Apply classification rules
+    if ($lateCount > 3 || $anomalyCount > 0) {
+        $classification = 'AT_RISK';
+    } elseif ($lateCount === 0 && $anomalyCount === 0 && $totalDprs >= 5) {
+        $classification = 'TOP_PERFORMER';
+    } else {
+        $classification = 'NORMAL';
+    }
+
+    // Fetch existing classification
+    $existingStmt = $pdo->prepare("SELECT classification FROM dss_classifications WHERE student_id = ?");
+    $existingStmt->execute([$studentId]);
+    $existing = $existingStmt->fetch(PDO::FETCH_ASSOC);
+    $oldClass = $existing ? $existing['classification'] : null;
+
+    // Upsert
+    $pdo->prepare("
+        INSERT INTO dss_classifications (student_id, classification, late_count, total_dprs, anomaly_count, classified_at)
+        VALUES (?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+            classification = VALUES(classification),
+            late_count     = VALUES(late_count),
+            total_dprs     = VALUES(total_dprs),
+            anomaly_count  = VALUES(anomaly_count),
+            classified_at  = NOW()
+    ")->execute([$studentId, $classification, $lateCount, $totalDprs, $anomalyCount]);
+
+    // Only send notifications when classification changes
+    if ($oldClass !== $classification) {
+        if ($classification === 'AT_RISK') {
+            createNotification($pdo, $studentId, 'at_risk',
+                'You have been classified as At-Risk based on your DPR submission record. Please contact your coordinator.',
+                'dpr.php');
+            notifyCoordinators($pdo, 'at_risk',
+                "{$studentName} has been classified as AT_RISK.",
+                '../coordinator/dpr_monitor.php');
+        } elseif ($classification === 'TOP_PERFORMER') {
+            createNotification($pdo, $studentId, 'top_performer',
+                'Congratulations! You have been recognized as a Top Performer based on your consistent DPR submissions.',
+                'dpr.php');
+            notifyCoordinators($pdo, 'dss_update',
+                "{$studentName} has been classified as TOP_PERFORMER.",
+                '../coordinator/dpr_monitor.php');
+        }
+    }
+
+    return $classification;
+}
+ 
 function notifTimeAgo($datetime) {
     $now = new DateTime();
     $then = new DateTime($datetime);

@@ -1,7 +1,10 @@
 <?php
 // student/dpr.php
+// Full working code with database integration and modal functionality
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../includes/functions.php';
+
+// Include database configuration from config folder
 require_once __DIR__ . '/../config/database.php';
 
 // Check if user is student
@@ -10,120 +13,123 @@ checkAccess('student');
 $username = $_SESSION['username'] ?? 'Student';
 $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Student';
 $role = getUserRole();
-$user_id = $_SESSION['user_id'] ?? 0;
+$student_id = $_SESSION['user_id'] ?? 0;
 
-// Define internship timeline
-define('INTERNSHIP_START_DATE', '2026-06-01');
-define('INTERNSHIP_END_DATE', '2026-08-31');
-
-// Handle form submission
-$success_message = '';
-$error_message = '';
-
-// Insert DPR into database with automatic timestamp
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_dpr'])) {
-    $date = $_POST['date'] ?? '';
-    $activities = trim($_POST['activities'] ?? '');
-    $time_in = $_POST['time_in'] ?? '';
-    $time_out = $_POST['time_out'] ?? '';
-    $accomplishments = trim($_POST['accomplishments'] ?? '');
-    $issues = trim($_POST['issues'] ?? '');
+// Handle AJAX requests for adding DPR
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
     
-    // Validation checks
-    $errors = [];
-    
-    // 1. Required field validation
-    if (empty($date)) {
-        $errors[] = 'Date is required.';
-    }
-    if (empty($activities)) {
-        $errors[] = 'Activities performed is required.';
-    }
-    if (empty($time_in)) {
-        $errors[] = 'Time in is required.';
-    }
-    if (empty($time_out)) {
-        $errors[] = 'Time out is required.';
-    }
-    if (empty($accomplishments)) {
-        $errors[] = 'Accomplishments is required.';
-    }
-    
-    // 2. Date validation (must be within internship timeline - but future dates allowed)
-    if (!empty($date)) {
-        $report_date = new DateTime($date);
-        $internship_start = new DateTime(INTERNSHIP_START_DATE);
-        $internship_end = new DateTime(INTERNSHIP_END_DATE);
-        $internship_end->setTime(23, 59, 59);
+    if ($_POST['action'] === 'add_dpr') {
+        $date = $_POST['date'] ?? date('Y-m-d');
+        $time_in = $_POST['time_in'] ?? null;
+        $time_out = $_POST['time_out'] ?? null;
+        $tasks = $_POST['tasks'] ?? '';
+        $feedback = $_POST['feedback'] ?? '';
+        $status = $_POST['status'] ?? 'In Progress';
         
-        // Allow dates within internship timeline including future dates
-        if ($report_date < $internship_start || $report_date > $internship_end) {
-            $errors[] = 'Report date must be within the internship period (' . date('M d, Y', strtotime(INTERNSHIP_START_DATE)) . ' - ' . date('M d, Y', strtotime(INTERNSHIP_END_DATE)) . ').';
+        // Validate
+        if (empty($tasks)) {
+            echo json_encode(['success' => false, 'message' => 'Task description is required']);
+            exit;
         }
-    }
-    
-    // 3. Time format validation
-    if (!empty($time_in) && !preg_match('/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/', $time_in)) {
-        $errors[] = 'Invalid time format for Time In. Please use HH:MM format.';
-    }
-    if (!empty($time_out) && !preg_match('/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/', $time_out)) {
-        $errors[] = 'Invalid time format for Time Out. Please use HH:MM format.';
-    }
-    
-    // 4. Time validation (time out must be after time in)
-    if (!empty($time_in) && !empty($time_out)) {
-        $time_in_obj = DateTime::createFromFormat('H:i', $time_in);
-        $time_out_obj = DateTime::createFromFormat('H:i', $time_out);
         
-        if ($time_in_obj && $time_out_obj && $time_out_obj <= $time_in_obj) {
-            $errors[] = 'Time out must be after time in.';
-        }
-    }
-    
-    // If no errors, proceed with submission
-    if (empty($errors)) {
         try {
-            // Get current timestamp for automatic recording
-            $submitted_at = date('Y-m-d H:i:s');
+            $stmt = $pdo->prepare("
+                INSERT INTO dpr_entries (student_id, date, time_in, time_out, tasks, feedback, status) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([$student_id, $date, $time_in, $time_out, $tasks, $feedback, $status]);
             
-            $stmt = $pdo->prepare("INSERT INTO daily_progress_reports (user_id, report_date, activities, time_in, time_out, accomplishments, issues, status, submitted_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, NOW())");
-            $stmt->execute([$user_id, $date, $activities, $time_in, $time_out, $accomplishments, $issues, $submitted_at]);
-            $success_message = 'Daily Progress Report submitted successfully at ' . date('h:i A', strtotime($submitted_at)) . '!';
-            
-            // Clear form data after success
-            $_POST = array();
+            echo json_encode(['success' => true, 'message' => 'DPR added successfully']);
         } catch (PDOException $e) {
-            $error_message = 'Database error: ' . $e->getMessage();
+            echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
         }
-    } else {
-        $error_message = implode('<br>', $errors);
+        exit;
+    }
+    
+    if ($_POST['action'] === 'update_status') {
+        $id = $_POST['id'] ?? 0;
+        $status = $_POST['status'] ?? '';
+        
+        try {
+            $stmt = $pdo->prepare("UPDATE dpr_entries SET status = ? WHERE id = ? AND student_id = ?");
+            $stmt->execute([$status, $id, $student_id]);
+            
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false]);
+        }
+        exit;
     }
 }
 
-// Fetch DPR history from database
-$dpr_history = [];
+// Get filter parameters
+$filter_date = $_GET['filter_date'] ?? '';
+$filter_status = $_GET['filter_status'] ?? '';
+
+// Fetch DPR entries from database with filters
+$dprEntries = [];
 try {
-    $stmt = $pdo->prepare("SELECT * FROM daily_progress_reports WHERE user_id = ? ORDER BY report_date DESC, created_at DESC");
-    $stmt->execute([$user_id]);
-    $dpr_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if ($student_id > 0) {
+        $sql = "SELECT * FROM dpr_entries WHERE student_id = ?";
+        $params = [$student_id];
+        
+        if (!empty($filter_date)) {
+            $sql .= " AND date = ?";
+            $params[] = $filter_date;
+        }
+        
+        if (!empty($filter_status)) {
+            $sql .= " AND status = ?";
+            $params[] = $filter_status;
+        }
+        
+        $sql .= " ORDER BY date DESC, id DESC";
+        
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $dprEntries = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 } catch (PDOException $e) {
-    // Table might not exist yet
-    $error_message = 'Database table not found. Please run the migration.';
+    if (strpos($e->getMessage(), 'Table') !== false) {
+        $dprEntries = [];
+        $tableError = 'DPR table not found. Please run the database setup script.';
+    } else {
+        $dprEntries = [];
+    }
 }
 
-// Get internship timeline info
-$internship_start = date('M d, Y', strtotime(INTERNSHIP_START_DATE));
-$internship_end = date('M d, Y', strtotime(INTERNSHIP_END_DATE));
-$today_date = date('Y-m-d');
+// Get distinct dates from the database for the filter dropdown
+$availableDates = [];
+try {
+    if ($student_id > 0) {
+        $stmt = $pdo->prepare("SELECT DISTINCT date FROM dpr_entries WHERE student_id = ? ORDER BY date DESC");
+        $stmt->execute([$student_id]);
+        $availableDates = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    }
+} catch (PDOException $e) {
+    $availableDates = [];
+}
+
+// Format dates for display (d M Y)
+function formatDateDisplay($date) {
+    if (empty($date)) return '';
+    $timestamp = strtotime($date);
+    return date('d M Y', $timestamp);
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Daily Progress Report - Student</title>
+    <title>Daily Progress Report · DPR</title>
     <link rel="stylesheet" href="../assets/styles.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <!-- Include jsPDF for PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
     <style>
         /* ----- Reset / base overrides ----- */
         * {
@@ -136,7 +142,6 @@ $today_date = date('Y-m-d');
             background: #f1f5f9;
             font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0f172a;
-            overflow-x: hidden;
         }
 
         .app-shell {
@@ -251,10 +256,9 @@ $today_date = date('Y-m-d');
             padding: 0 32px 32px 32px;
             display: flex;
             flex-direction: column;
-            transition: all 0.3s ease;
         }
 
-        /* ----- TOP HEADER ----- */
+        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
         .top-header {
             display: flex;
             justify-content: space-between;
@@ -298,6 +302,7 @@ $today_date = date('Y-m-d');
             gap: 20px;
         }
 
+        /* Notification bell */
         .notif-bell {
             position: relative;
             font-size: 1.3rem;
@@ -336,6 +341,7 @@ $today_date = date('Y-m-d');
             border: 2px solid #0f172a;
         }
 
+        /* User profile chip */
         .user-profile {
             display: flex;
             align-items: center;
@@ -376,34 +382,6 @@ $today_date = date('Y-m-d');
             text-transform: capitalize;
         }
 
-        /* Timeline Info Banner */
-        .timeline-banner {
-            background: linear-gradient(135deg, #e0e7ff, #dbeafe);
-            border: 1px solid #93c5fd;
-            border-radius: 12px;
-            padding: 14px 20px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        .timeline-banner i {
-            color: #3b82f6;
-            font-size: 1.3rem;
-        }
-
-        .timeline-banner .timeline-text {
-            font-size: 0.9rem;
-            color: #1e40af;
-            font-weight: 500;
-        }
-
-        .timeline-banner .timeline-text strong {
-            color: #1e3a8a;
-        }
-
         /* ----- PAGE CARD ----- */
         .page-card {
             background: #fff;
@@ -417,11 +395,19 @@ $today_date = date('Y-m-d');
         .page-card h2 {
             font-size: 1.3rem;
             margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
-        .page-card p {
+        .page-card h2 i {
+            color: #2563eb;
+        }
+
+        .page-card p.sub {
             color: #64748b;
             font-size: 0.95rem;
+            margin-bottom: 20px;
         }
 
         /* ----- TABLE CONTROLS ----- */
@@ -429,49 +415,140 @@ $today_date = date('Y-m-d');
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin: 20px 0 16px 0;
             flex-wrap: wrap;
-            gap: 12px;
+            gap: 16px;
+            margin-bottom: 20px;
+            padding: 12px 16px;
+            background: #f8fafc;
+            border-radius: 16px;
+            border: 1px solid #eef2f7;
         }
 
-        .table-controls h3 {
-            font-size: 1.1rem;
-            color: #0f172a;
+        .controls-left {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
+            flex-wrap: wrap;
         }
 
-        .btn-create {
-            padding: 10px 24px;
-            background: #0f172a;
-            color: #fff;
-            border: none;
-            border-radius: 12px;
+        .controls-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .filter-label {
+            font-size: 0.8rem;
             font-weight: 600;
-            font-size: 0.9rem;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-right: 4px;
+        }
+
+        .filter-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: #fff;
+            padding: 4px 12px 4px 16px;
+            border-radius: 999px;
+            border: 1px solid #e2e8f0;
+            transition: 0.2s;
+        }
+
+        .filter-item:focus-within {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .filter-item i {
+            color: #94a3b8;
+            font-size: 0.8rem;
+        }
+
+        .filter-item select {
+            border: none;
+            padding: 8px 4px;
+            font-size: 0.85rem;
+            background: transparent;
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            color: #0a1628;
+            min-width: 130px;
             cursor: pointer;
-            transition: all 0.15s;
+        }
+
+        .filter-item select:focus {
+            outline: none;
+        }
+
+        .btn-sm {
+            padding: 8px 18px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 0.82rem;
             display: inline-flex;
             align-items: center;
             gap: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            text-decoration: none;
+            white-space: nowrap;
         }
 
-        .btn-create:hover {
+        .btn-sm-primary {
+            background: #0f172a;
+            color: #fff;
+        }
+
+        .btn-sm-primary:hover {
             background: #1e293b;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.3);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
         }
 
-        .btn-create i {
-            font-size: 1rem;
+        .btn-sm-success {
+            background: #059669;
+            color: #fff;
+        }
+
+        .btn-sm-success:hover {
+            background: #047857;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.2);
+        }
+
+        .btn-sm-filter {
+            background: #2563eb;
+            color: #fff;
+        }
+
+        .btn-sm-filter:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+        }
+
+        .btn-sm-reset {
+            background: #f1f5f9;
+            color: #64748b;
+            border: 1px solid #e2e8f0;
+        }
+
+        .btn-sm-reset:hover {
+            background: #e9edf4;
+            color: #0f172a;
         }
 
         /* ----- DPR TABLE ----- */
-        .table-wrapper {
+        .dpr-table-wrap {
             overflow-x: auto;
             border-radius: 16px;
-            border: 1px solid #e2e8f0;
+            border: 1px solid #eef2f7;
+            background: #fff;
         }
 
         .dpr-table {
@@ -480,291 +557,293 @@ $today_date = date('Y-m-d');
             font-size: 0.9rem;
         }
 
-        .dpr-table thead {
-            background: #f8fafc;
-        }
-
         .dpr-table th {
+            background: #f8fafc;
+            color: #1e293b;
+            font-weight: 600;
             padding: 14px 16px;
             text-align: left;
-            font-weight: 600;
-            color: #0f172a;
             border-bottom: 2px solid #e2e8f0;
-            white-space: nowrap;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
         }
 
         .dpr-table td {
             padding: 14px 16px;
-            border-bottom: 1px solid #f1f5f9;
-            color: #334155;
-            vertical-align: top;
-        }
-
-        .dpr-table tbody tr:hover {
-            background: #f8fafc;
+            border-bottom: 1px solid #edf2f7;
+            vertical-align: middle;
         }
 
         .dpr-table tbody tr:last-child td {
             border-bottom: none;
         }
 
-        .issue-tag {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 20px;
+        .dpr-table tbody tr:hover {
+            background: #fafcff;
+        }
+
+        .dpr-table .date-cell {
+            font-weight: 600;
+            color: #0f172a;
+        }
+
+        .badge-status {
+            padding: 4px 14px;
+            border-radius: 999px;
             font-size: 0.75rem;
             font-weight: 600;
-        }
-
-        .issue-tag.none {
-            background: #ecfdf5;
-            color: #065f46;
-        }
-
-        .issue-tag.has-issue {
-            background: #fef2f2;
-            color: #991b1b;
-        }
-
-        .status-badge {
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 600;
         }
 
-        .status-badge.submitted {
+        .badge-status.in-progress {
+            background: #fef9c3;
+            color: #854d0e;
+        }
+
+        .badge-status.completed {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .badge-status.pending {
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        /* View buttons */
+        .view-btn {
+            padding: 6px 16px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-family: inherit;
+            border: none;
+        }
+
+        .view-btn-task {
             background: #dbeafe;
-            color: #1e40af;
+            color: #1d4ed8;
         }
 
-        .status-badge.approved {
-            background: #d1fae5;
-            color: #065f46;
+        .view-btn-task:hover {
+            background: #bfdbfe;
+            transform: scale(1.02);
         }
 
-        .status-badge.rejected {
-            background: #fef3c7;
-            color: #92400e;
+        .view-btn-feedback {
+            background: #eef2ff;
+            color: #4338ca;
         }
 
-        .status-badge.pending {
-            background: #fef3c7;
-            color: #92400e;
+        .view-btn-feedback:hover {
+            background: #c7d2fe;
+            transform: scale(1.02);
         }
 
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
+        .view-btn.no-content {
+            background: #f1f5f9;
             color: #94a3b8;
+            cursor: default;
         }
 
-        .empty-state i {
-            font-size: 3rem;
+        .view-btn.no-content:hover {
+            background: #f1f5f9;
+            transform: none;
+        }
+
+        .empty-row td {
+            padding: 32px 16px;
+            text-align: center;
+            color: #94a3b8;
+            font-style: italic;
+        }
+
+        .empty-row td i {
+            font-size: 2rem;
+            display: block;
             margin-bottom: 12px;
             color: #cbd5e1;
         }
 
-        .empty-state p {
-            font-size: 1rem;
-        }
-
-        .count-badge {
-            background: #e2e8f0;
-            color: #0f172a;
-            padding: 2px 10px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-
-        /* Submitted timestamp style */
-        .timestamp {
-            font-size: 0.75rem;
-            color: #64748b;
-            display: block;
-            margin-top: 4px;
-        }
-
-        /* ----- RIGHT SIDEBAR (Overlay) ----- */
-        .overlay {
+        /* ----- MODAL ----- */
+        .modal-overlay {
             display: none;
             position: fixed;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 999;
-            animation: fadeIn 0.3s ease;
-        }
-
-        .overlay.active {
-            display: block;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-
-        @keyframes slideIn {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
-        }
-
-        .right-sidebar {
-            position: fixed;
-            top: 0;
-            right: -100%;
-            width: 50%;
-            height: 100%;
-            background: #fff;
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
             z-index: 1000;
-            padding: 32px;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-card {
+            background: #fff;
+            border-radius: 24px;
+            max-width: 560px;
+            width: 94%;
+            padding: 32px 30px 28px;
+            box-shadow: 0 40px 60px -20px rgba(0,0,0,0.4);
+            animation: slideUp 0.25s ease;
+            max-height: 90vh;
             overflow-y: auto;
-            transition: right 0.3s ease;
-            box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
         }
 
-        .right-sidebar.open {
-            right: 0;
+        @keyframes slideUp {
+            0% {
+                transform: translateY(30px);
+                opacity: 0.6;
+            }
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
         }
 
-        .sidebar-header {
+        .modal-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 24px;
-            padding-bottom: 16px;
-            border-bottom: 2px solid #f1f5f9;
+            margin-bottom: 6px;
         }
 
-        .sidebar-header h2 {
-            font-size: 1.3rem;
+        .modal-header h2 {
+            font-size: 1.4rem;
+            font-weight: 700;
             color: #0f172a;
             display: flex;
             align-items: center;
             gap: 10px;
         }
 
-        .sidebar-header h2 i {
-            color: #3b82f6;
+        .modal-header h2 i {
+            color: #2563eb;
         }
 
-        .btn-close {
+        .modal-close {
             background: none;
             border: none;
-            font-size: 1.5rem;
-            color: #64748b;
+            font-size: 1.8rem;
+            color: #94a3b8;
             cursor: pointer;
-            padding: 8px;
-            border-radius: 8px;
-            transition: all 0.15s;
+            padding: 0 8px;
+            transition: 0.15s;
         }
 
-        .btn-close:hover {
-            background: #f1f5f9;
-            color: #0f172a;
+        .modal-close:hover {
+            color: #1e293b;
         }
 
-        /* ----- DPR FORM IN SIDEBAR ----- */
-        .dpr-form {
-            display: flex;
-            flex-direction: column;
-            gap: 18px;
-        }
-
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
+        .modal-hint {
+            color: #64748b;
+            font-size: 0.9rem;
+            margin-bottom: 22px;
         }
 
         .form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .form-group.full-width {
-            grid-column: 1 / -1;
+            margin-bottom: 18px;
         }
 
         .form-group label {
+            display: block;
             font-weight: 600;
             font-size: 0.85rem;
-            color: #0f172a;
-            display: flex;
-            align-items: center;
-            gap: 6px;
+            color: #1e293b;
+            margin-bottom: 5px;
         }
 
-        .form-group label .required {
-            color: #ef4444;
-            font-size: 1.1rem;
-        }
-
-        .form-group .field-hint {
-            font-size: 0.75rem;
-            color: #94a3b8;
-            font-weight: 400;
+        .form-group label i {
+            margin-right: 6px;
+            color: #64748b;
         }
 
         .form-group input,
         .form-group textarea,
         .form-group select {
-            padding: 10px 14px;
-            border: 1.5px solid #e2e8f0;
-            border-radius: 12px;
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #d1d9e6;
+            border-radius: 14px;
             font-size: 0.95rem;
-            transition: all 0.15s;
+            background: #fafcff;
+            transition: 0.15s;
             font-family: inherit;
-            background: #fafbfc;
         }
 
         .form-group input:focus,
         .form-group textarea:focus,
         .form-group select:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
-            background: #fff;
-        }
-
-        .form-group input:invalid,
-        .form-group textarea:invalid {
-            border-color: #ef4444;
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
         }
 
         .form-group textarea {
-            resize: vertical;
             min-height: 80px;
+            resize: vertical;
         }
 
-        .form-group input[type="time"] {
-            padding: 8px 14px;
+        .form-row {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
         }
 
-        .form-actions {
+        .form-row .form-group {
+            flex: 1;
+            min-width: 120px;
+        }
+
+        .modal-actions {
             display: flex;
             gap: 12px;
-            margin-top: 8px;
-            padding-top: 16px;
-            border-top: 2px solid #f1f5f9;
+            justify-content: flex-end;
+            margin-top: 24px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 22px;
+        }
+
+        .btn-close-modal {
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            color: #1e293b;
+            padding: 10px 24px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: inherit;
+        }
+
+        .btn-close-modal:hover {
+            background: #e9edf4;
         }
 
         .btn-submit {
-            padding: 12px 32px;
             background: #0f172a;
-            color: #fff;
             border: none;
-            border-radius: 12px;
+            color: #fff;
+            padding: 10px 28px;
+            border-radius: 999px;
             font-weight: 600;
-            font-size: 1rem;
+            font-size: 0.85rem;
             cursor: pointer;
-            transition: all 0.15s;
+            transition: 0.15s;
+            font-family: inherit;
             display: inline-flex;
             align-items: center;
             gap: 8px;
@@ -773,63 +852,114 @@ $today_date = date('Y-m-d');
         .btn-submit:hover {
             background: #1e293b;
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
         }
 
-        .btn-cancel {
-            padding: 12px 24px;
-            background: #f1f5f9;
+        /* ----- VIEW CONTENT MODAL ----- */
+        .view-content-display {
+            padding: 8px 0 4px;
+        }
+
+        .view-content-display .meta-info {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #edf2f7;
+        }
+
+        .view-content-display .meta-info .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #64748b;
+        }
+
+        .view-content-display .meta-info .meta-item strong {
             color: #0f172a;
-            border: none;
-            border-radius: 12px;
             font-weight: 600;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: all 0.15s;
         }
 
-        .btn-cancel:hover {
-            background: #e2e8f0;
+        .view-content-display .content-text {
+            background: #f8fafc;
+            padding: 16px 20px;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            line-height: 1.7;
+            color: #1e293b;
+            min-height: 60px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
 
-        .alert {
-            padding: 14px 20px;
+        .view-content-display .content-text.task-text {
+            border-left: 4px solid #2563eb;
+        }
+
+        .view-content-display .content-text.feedback-text {
+            border-left: 4px solid #7c3aed;
+        }
+
+        .view-content-display .content-text .empty-text {
+            color: #94a3b8;
+            font-style: italic;
+        }
+
+        /* ----- TOAST ----- */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 2000;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+        }
+
+        .toast.success {
+            background: #059669;
+        }
+
+        .toast.error {
+            background: #dc2626;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        .alert-box {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            color: #92400e;
+            padding: 16px 20px;
             border-radius: 12px;
             margin-bottom: 20px;
-            font-weight: 500;
             display: flex;
-            align-items: flex-start;
-            gap: 10px;
+            align-items: center;
+            gap: 12px;
         }
 
-        .alert-success {
-            background: #ecfdf5;
-            color: #065f46;
-            border: 1px solid #a7f3d0;
+        .alert-box i {
+            font-size: 1.2rem;
         }
 
-        .alert-error {
-            background: #fef2f2;
-            color: #991b1b;
-            border: 1px solid #fca5a5;
-        }
-
-        .alert-error ul {
-            margin: 4px 0 0 20px;
-            padding: 0;
-        }
-
-        .alert-error ul li {
-            margin-bottom: 2px;
-        }
-
-        @media (max-width: 768px) {
-            .right-sidebar {
-                width: 100%;
-            }
-            .form-row {
-                grid-template-columns: 1fr;
-            }
+        /* ----- RESPONSIVE ----- */
+        @media (max-width: 720px) {
             .top-header {
                 flex-direction: column;
                 align-items: stretch;
@@ -842,9 +972,51 @@ $today_date = date('Y-m-d');
             .page-card {
                 padding: 16px;
             }
-            .timeline-banner {
+            .dpr-table th,
+            .dpr-table td {
+                padding: 10px 12px;
+                font-size: 0.8rem;
+            }
+            .modal-card {
+                padding: 24px 18px;
+            }
+            .form-row {
                 flex-direction: column;
-                align-items: flex-start;
+                gap: 0;
+            }
+            .table-controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .controls-left,
+            .controls-right {
+                justify-content: center;
+            }
+            .filter-item select {
+                min-width: 100px;
+            }
+            .view-btn {
+                font-size: 0.65rem;
+                padding: 4px 10px;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .controls-left,
+            .controls-right {
+                flex-wrap: wrap;
+            }
+            .filter-item {
+                flex: 1;
+                min-width: 140px;
+            }
+            .filter-item select {
+                min-width: 80px;
+                width: 100%;
+            }
+            .view-content-display .meta-info {
+                flex-direction: column;
+                gap: 8px;
             }
         }
     </style>
@@ -859,9 +1031,9 @@ $today_date = date('Y-m-d');
             </div>
             <nav class="nav-section">
                 <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item" href="apply.php"><i class="fa-solid fa-paper-plane"></i> Apply Job</a>
-                <a class="nav-item" href="applications.php"><i class="fa-solid fa-list-check"></i> My Applications</a>
-                <a class="nav-item active" href="dpr.php"><i class="fa-solid fa-clipboard-list"></i> Daily Progress Report</a>
+                <a class="nav-item" href="apply.php"><i class="fa-solid fa-briefcase"></i> Apply Job</a>
+                <a class="nav-item" href="applications.php"><i class="fa-solid fa-file-lines"></i> My Applications</a>
+                <a class="nav-item active" href="dpr.php"><i class="fa-regular fa-calendar-check"></i> Daily Progress Report</a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
@@ -869,14 +1041,14 @@ $today_date = date('Y-m-d');
         </aside>
 
         <!-- Main Workspace -->
-        <main class="main-content" id="mainContent">
+        <main class="main-content">
             <!-- TOP HEADER -->
             <div class="top-header">
                 <div class="header-left">
                     <h1>
-                        <i class="fa-solid fa-clipboard-list"></i>
-                        Daily Progress Report
-                        <small>Student</small>
+                        <i class="fa-regular fa-calendar-check"></i>
+                        Daily Progress
+                        <small>DPR</small>
                     </h1>
                 </div>
                 <div class="header-right">
@@ -887,14 +1059,14 @@ $today_date = date('Y-m-d');
                     <div class="user-profile">
                         <div class="user-avatar">
                             <?php
-                                $initials = '';
-                                $parts = explode(' ', trim($fullname));
-                                if (count($parts) >= 2) {
-                                    $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
-                                } else {
-                                    $initials = strtoupper(substr($fullname, 0, 2));
-                                }
-                                echo htmlspecialchars($initials);
+                            $initials = '';
+                            $parts = explode(' ', trim($fullname));
+                            if (count($parts) >= 2) {
+                                $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
+                            } else {
+                                $initials = strtoupper(substr($fullname, 0, 2));
+                            }
+                            echo htmlspecialchars($initials);
                             ?>
                         </div>
                         <div class="user-info">
@@ -905,340 +1077,737 @@ $today_date = date('Y-m-d');
                 </div>
             </div>
 
-            <!-- Page Content -->
+            <!-- DPR CONTENT -->
             <div class="page-card">
-                <h2>Your Daily Progress Reports</h2>
-                <p>Track and manage your daily activities, accomplishments, and challenges.</p>
+                <h2><i class="fa-regular fa-clock"></i> Progress Reports</h2>
+                <p class="sub">Track your daily time, tasks, and feedback</p>
 
-                <!-- Timeline Banner -->
-                <div class="timeline-banner">
-                    <i class="fa-solid fa-calendar-check"></i>
-                    <div class="timeline-text">
-                        <strong>Internship Timeline:</strong> 
-                        <?php echo $internship_start; ?> - <?php echo $internship_end; ?>
-                        <span style="margin-left: 12px; font-weight: 400;">
-                            <i class="fa-regular fa-clock"></i> 
-                            Today: <?php echo date('M d, Y'); ?>
-                        </span>
-                        <span style="margin-left: 12px; font-weight: 400; color: #6b7280;">
-                            <i class="fa-regular fa-calendar-plus"></i>
-                            Future dates are allowed
-                        </span>
-                    </div>
-                </div>
-
-                <!-- Display Messages -->
-                <?php if ($success_message): ?>
-                    <div class="alert alert-success" style="margin-top: 16px;">
-                        <i class="fa-solid fa-check-circle"></i>
-                        <?php echo $success_message; ?>
+                <?php if (isset($tableError)): ?>
+                    <div class="alert-box">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        <span><?php echo htmlspecialchars($tableError); ?></span>
                     </div>
                 <?php endif; ?>
 
-                <?php if ($error_message): ?>
-                    <div class="alert alert-error" style="margin-top: 16px;">
-                        <i class="fa-solid fa-exclamation-circle"></i>
-                        <div>
-                            <strong>Please fix the following errors:</strong>
-                            <ul>
-                                <?php 
-                                $errors = explode('<br>', $error_message);
-                                foreach ($errors as $error): 
-                                ?>
-                                    <li><?php echo htmlspecialchars($error); ?></li>
-                                <?php endforeach; ?>
-                            </ul>
-                        </div>
-                    </div>
-                <?php endif; ?>
-
-                <!-- Table Controls -->
+                <!-- TABLE CONTROLS -->
                 <div class="table-controls">
-                    <h3>
-                        <i class="fa-regular fa-clock-rotate-left"></i>
-                        Report History
-                        <span class="count-badge"><?php echo count($dpr_history); ?></span>
-                    </h3>
-                    <button class="btn-create" onclick="openSidebar()">
-                        <i class="fa-solid fa-plus"></i>
-                        Create DPR
-                    </button>
+                    <div class="controls-left">
+                        <span class="filter-label"><i class="fa-solid fa-sliders"></i> Filters</span>
+                        
+                        <div class="filter-item">
+                            <i class="fa-regular fa-calendar"></i>
+                            <select id="filterDate">
+                                <option value="">All Dates</option>
+                                <?php if (!empty($availableDates)): ?>
+                                    <?php foreach ($availableDates as $date): ?>
+                                        <option value="<?php echo htmlspecialchars($date); ?>" <?php echo $filter_date === $date ? 'selected' : ''; ?>>
+                                            <?php echo htmlspecialchars(formatDateDisplay($date)); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </select>
+                        </div>
+
+                        <div class="filter-item">
+                            <i class="fa-regular fa-flag"></i>
+                            <select id="filterStatus">
+                                <option value="">All Status</option>
+                                <option value="In Progress" <?php echo $filter_status === 'In Progress' ? 'selected' : ''; ?>>In Progress</option>
+                                <option value="Completed" <?php echo $filter_status === 'Completed' ? 'selected' : ''; ?>>Completed</option>
+                                <option value="Pending" <?php echo $filter_status === 'Pending' ? 'selected' : ''; ?>>Pending</option>
+                            </select>
+                        </div>
+
+                        <button class="btn-sm btn-sm-filter" onclick="applyFilters()">
+                            <i class="fa-solid fa-filter"></i> Apply
+                        </button>
+                        <button class="btn-sm btn-sm-reset" onclick="resetFilters()">
+                            <i class="fa-solid fa-rotate-right"></i> Reset
+                        </button>
+                    </div>
+
+                    <div class="controls-right">
+                        <button class="btn-sm btn-sm-success" onclick="exportPDF()">
+                            <i class="fa-regular fa-file-pdf"></i> Export PDF
+                        </button>
+                        <button class="btn-sm btn-sm-primary" id="openModalBtn">
+                            <i class="fa-regular fa-plus"></i> Add Entry
+                        </button>
+                    </div>
                 </div>
 
-                <!-- DPR Table -->
-                <?php if (empty($dpr_history)): ?>
-                    <div class="empty-state">
-                        <i class="fa-regular fa-folder-open"></i>
-                        <p>No reports submitted yet.</p>
-                        <p style="font-size: 0.85rem; margin-top: 8px;">Click the <strong>"Create DPR"</strong> button to submit your first report.</p>
-                    </div>
-                <?php else: ?>
-                    <div class="table-wrapper">
-                        <table class="dpr-table">
-                            <thead>
-                                <tr>
-                                    <th><i class="fa-regular fa-calendar"></i> Date</th>
-                                    <th><i class="fa-regular fa-file-lines"></i> Activities</th>
-                                    <th><i class="fa-regular fa-clock"></i> Time In</th>
-                                    <th><i class="fa-regular fa-clock"></i> Time Out</th>
-                                    <th><i class="fa-regular fa-circle-check"></i> Accomplishments</th>
-                                    <th><i class="fa-regular fa-triangle-exclamation"></i> Issues</th>
-                                    <th><i class="fa-regular fa-flag"></i> Status</th>
-                                    <th><i class="fa-regular fa-clock"></i> Submitted</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($dpr_history as $report): ?>
-                                    <tr>
-                                        <td><?php echo date('M d, Y', strtotime($report['report_date'])); ?></td>
-                                        <td><?php echo htmlspecialchars($report['activities']); ?></td>
-                                        <td><?php echo date('h:i A', strtotime($report['time_in'])); ?></td>
-                                        <td><?php echo date('h:i A', strtotime($report['time_out'])); ?></td>
-                                        <td><?php echo htmlspecialchars($report['accomplishments']); ?></td>
+                <!-- DPR TABLE -->
+                <div class="dpr-table-wrap">
+                    <table class="dpr-table" id="dprTable">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Time In</th>
+                                <th>Time Out</th>
+                                <th>Task Accomplished</th>
+                                <th>Student Feedback</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dprTableBody">
+                            <?php if (!empty($dprEntries) && count($dprEntries) > 0): ?>
+                                <?php foreach ($dprEntries as $entry): ?>
+                                    <?php
+                                    $statusClass = strtolower($entry['status']);
+                                    $statusClass = str_replace(' ', '-', $statusClass);
+                                    $hasTask = !empty($entry['tasks']);
+                                    $hasFeedback = !empty($entry['feedback']);
+                                    ?>
+                                    <tr data-id="<?php echo $entry['id']; ?>">
+                                        <td class="date-cell"><?php echo htmlspecialchars(formatDateDisplay($entry['date'])); ?></td>
+                                        <td><?php echo htmlspecialchars($entry['time_in'] ?? '—'); ?></td>
+                                        <td><?php echo htmlspecialchars($entry['time_out'] ?? '—'); ?></td>
                                         <td>
-                                            <?php if (empty($report['issues']) || strtolower($report['issues']) === 'none'): ?>
-                                                <span class="issue-tag none"><i class="fa-regular fa-check"></i> None</span>
-                                            <?php else: ?>
-                                                <span class="issue-tag has-issue"><i class="fa-regular fa-circle-exclamation"></i> <?php echo htmlspecialchars($report['issues']); ?></span>
-                                            <?php endif; ?>
+                                            <button class="view-btn view-btn-task <?php echo $hasTask ? '' : 'no-content'; ?>"
+                                                    onclick="viewTask(<?php echo $entry['id']; ?>, '<?php echo addslashes($entry['tasks'] ?? ''); ?>', '<?php echo addslashes($entry['date']); ?>', '<?php echo addslashes($entry['time_in'] ?? ''); ?>', '<?php echo addslashes($entry['time_out'] ?? ''); ?>')"
+                                                    <?php echo $hasTask ? '' : 'disabled'; ?>>
+                                                <i class="fa-regular fa-list-check"></i>
+                                                <?php echo $hasTask ? 'View Task' : 'No Task'; ?>
+                                            </button>
                                         </td>
                                         <td>
-                                            <span class="status-badge <?php echo strtolower($report['status']); ?>">
-                                                <i class="fa-regular fa-circle-check"></i>
-                                                <?php echo ucfirst($report['status']); ?>
+                                            <button class="view-btn view-btn-feedback <?php echo $hasFeedback ? '' : 'no-content'; ?>"
+                                                    onclick="viewFeedback(<?php echo $entry['id']; ?>, '<?php echo addslashes($entry['feedback'] ?? ''); ?>', '<?php echo addslashes($entry['date']); ?>', '<?php echo addslashes($entry['tasks'] ?? ''); ?>')"
+                                                    <?php echo $hasFeedback ? '' : 'disabled'; ?>>
+                                                <i class="fa-regular fa-comment"></i>
+                                                <?php echo $hasFeedback ? 'View Feedback' : 'No Feedback'; ?>
+                                            </button>
+                                        </td>
+                                        <td>
+                                            <span class="badge-status <?php echo $statusClass; ?>">
+                                                <?php echo htmlspecialchars($entry['status']); ?>
                                             </span>
-                                        </td>
-                                        <td>
-                                            <?php if (!empty($report['submitted_at'])): ?>
-                                                <?php echo date('M d, Y h:i A', strtotime($report['submitted_at'])); ?>
-                                                <span class="timestamp">
-                                                    <i class="fa-regular fa-clock"></i> 
-                                                    <?php 
-                                                    $submitted = new DateTime($report['submitted_at']);
-                                                    $now = new DateTime();
-                                                    $diff = $now->diff($submitted);
-                                                    if ($diff->days == 0) {
-                                                        if ($diff->h == 0 && $diff->i == 0) {
-                                                            echo 'Just now';
-                                                        } else {
-                                                            echo $diff->h . 'h ' . $diff->i . 'm ago';
-                                                        }
-                                                    } else {
-                                                        echo $diff->days . ' days ago';
-                                                    }
-                                                    ?>
-                                                </span>
-                                            <?php else: ?>
-                                                <span style="color: #94a3b8;">N/A</span>
-                                            <?php endif; ?>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                <?php endif; ?>
+                            <?php else: ?>
+                                <tr class="empty-row">
+                                    <td colspan="6">
+                                        <i class="fa-regular fa-calendar-circle-plus"></i>
+                                        No progress reports found.<br>
+                                        <span style="font-size:0.85rem; color:#cbd5e1;">Start your first entry today!</span>
+                                    </td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </main>
     </div>
 
-    <!-- Overlay -->
-    <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
+    <!-- ===== ADD DPR MODAL ===== -->
+    <div class="modal-overlay" id="dprModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2><i class="fa-regular fa-pen-to-square"></i> Add DPR Entry</h2>
+                <button class="modal-close" id="closeModalBtn">&times;</button>
+            </div>
+            <div class="modal-hint">Fill in your daily progress details below.</div>
 
-    <!-- Right Sidebar -->
-    <div class="right-sidebar" id="rightSidebar">
-        <div class="sidebar-header">
-            <h2>
-                <i class="fa-solid fa-pen-to-square"></i>
-                Create Daily Progress Report
-            </h2>
-            <button class="btn-close" onclick="closeSidebar()">
-                <i class="fa-solid fa-xmark"></i>
-            </button>
+            <form id="dprForm">
+                <div class="form-group">
+                    <label for="entryDate"><i class="fa-regular fa-calendar"></i> Date</label>
+                    <input type="date" id="entryDate" required />
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="entryTimeIn"><i class="fa-regular fa-clock"></i> Time In</label>
+                        <input type="time" id="entryTimeIn" />
+                    </div>
+                    <div class="form-group">
+                        <label for="entryTimeOut"><i class="fa-regular fa-clock"></i> Time Out</label>
+                        <input type="time" id="entryTimeOut" />
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="entryTasks"><i class="fa-regular fa-list-check"></i> Task Accomplished *</label>
+                    <textarea id="entryTasks" placeholder="Describe what you accomplished today..." required></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="entryFeedback"><i class="fa-regular fa-comment"></i> Student Feedback</label>
+                    <textarea id="entryFeedback" placeholder="Any feedback or questions?"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="entryStatus"><i class="fa-regular fa-flag"></i> Status</label>
+                    <select id="entryStatus">
+                        <option value="In Progress">In Progress</option>
+                        <option value="Completed">Completed</option>
+                        <option value="Pending">Pending</option>
+                    </select>
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn-close-modal" id="closeModalBtn2">Cancel</button>
+                    <button type="submit" class="btn-submit"><i class="fa-regular fa-check"></i> Save Entry</button>
+                </div>
+            </form>
         </div>
+    </div>
 
-        <!-- Display messages in sidebar -->
-        <?php if ($success_message): ?>
-            <div class="alert alert-success">
-                <i class="fa-solid fa-check-circle"></i>
-                <?php echo $success_message; ?>
+    <!-- ===== VIEW TASK MODAL ===== -->
+    <div class="modal-overlay" id="taskModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2><i class="fa-regular fa-list-check"></i> Task Accomplished</h2>
+                <button class="modal-close" id="closeTaskBtn">&times;</button>
             </div>
-        <?php endif; ?>
+            <div class="modal-hint">View the task details for this entry.</div>
 
-        <?php if ($error_message): ?>
-            <div class="alert alert-error">
-                <i class="fa-solid fa-exclamation-circle"></i>
-                <div>
-                    <strong>Please fix the following errors:</strong>
-                    <ul>
-                        <?php 
-                        $errors = explode('<br>', $error_message);
-                        foreach ($errors as $error): 
-                        ?>
-                            <li><?php echo htmlspecialchars($error); ?></li>
-                        <?php endforeach; ?>
-                    </ul>
+            <div class="view-content-display">
+                <div class="meta-info">
+                    <div class="meta-item">
+                        <i class="fa-regular fa-calendar"></i>
+                        <strong>Date:</strong> <span id="taskDate">—</span>
+                    </div>
+                    <div class="meta-item">
+                        <i class="fa-regular fa-clock"></i>
+                        <strong>Time:</strong> <span id="taskTime">—</span>
+                    </div>
                 </div>
-            </div>
-        <?php endif; ?>
-
-        <!-- DPR Form -->
-        <form method="POST" action="" class="dpr-form" id="dprForm" novalidate>
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="date">
-                        <i class="fa-regular fa-calendar"></i> Date of Report
-                        <span class="required">*</span>
-                    </label>
-                    <input type="date" id="date" name="date" 
-                           value="<?php echo isset($_POST['date']) ? htmlspecialchars($_POST['date']) : date('Y-m-d'); ?>" 
-                           min="<?php echo INTERNSHIP_START_DATE; ?>" 
-                           max="<?php echo INTERNSHIP_END_DATE; ?>" 
-                           required>
-                    <span class="field-hint">Must be within internship period (future dates allowed)</span>
-                </div>
-
-                <div class="form-group">
-                    <label><i class="fa-regular fa-circle-check"></i> Status</label>
-                    <input type="text" value="Ready to Submit" disabled style="background: #f1f5f9; color: #64748b;">
+                <div class="content-text task-text" id="taskTextDisplay">
+                    <span class="empty-text">No task description provided.</span>
                 </div>
             </div>
 
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="time_in">
-                        <i class="fa-regular fa-clock"></i> Time In
-                        <span class="required">*</span>
-                    </label>
-                    <input type="time" id="time_in" name="time_in" 
-                           value="<?php echo isset($_POST['time_in']) ? htmlspecialchars($_POST['time_in']) : '08:00'; ?>" 
-                           required>
-                    <span class="field-hint">Use 24-hour format (HH:MM)</span>
+            <div class="modal-actions" style="border-top: none; padding-top: 16px; margin-top: 8px;">
+                <button class="btn-close-modal" id="closeTaskBtn2">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== VIEW FEEDBACK MODAL ===== -->
+    <div class="modal-overlay" id="feedbackModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2><i class="fa-regular fa-comment"></i> Student Feedback</h2>
+                <button class="modal-close" id="closeFeedbackBtn">&times;</button>
+            </div>
+            <div class="modal-hint">View the feedback details for this entry.</div>
+
+            <div class="view-content-display">
+                <div class="meta-info">
+                    <div class="meta-item">
+                        <i class="fa-regular fa-calendar"></i>
+                        <strong>Date:</strong> <span id="feedbackDate">—</span>
+                    </div>
+                    <div class="meta-item">
+                        <i class="fa-regular fa-list-check"></i>
+                        <strong>Task:</strong> <span id="feedbackTask">—</span>
+                    </div>
                 </div>
-
-                <div class="form-group">
-                    <label for="time_out">
-                        <i class="fa-regular fa-clock"></i> Time Out
-                        <span class="required">*</span>
-                    </label>
-                    <input type="time" id="time_out" name="time_out" 
-                           value="<?php echo isset($_POST['time_out']) ? htmlspecialchars($_POST['time_out']) : '17:00'; ?>" 
-                           required>
-                    <span class="field-hint">Must be after Time In</span>
+                <div class="content-text feedback-text" id="feedbackTextDisplay">
+                    <span class="empty-text">No feedback provided.</span>
                 </div>
             </div>
 
-            <div class="form-group full-width">
-                <label for="activities">
-                    <i class="fa-regular fa-file-lines"></i> Activities Performed
-                    <span class="required">*</span>
-                </label>
-                <textarea id="activities" name="activities" 
-                          placeholder="Describe what you worked on today..." 
-                          required><?php echo isset($_POST['activities']) ? htmlspecialchars($_POST['activities']) : ''; ?></textarea>
+            <div class="modal-actions" style="border-top: none; padding-top: 16px; margin-top: 8px;">
+                <button class="btn-close-modal" id="closeFeedbackBtn2">Close</button>
             </div>
+        </div>
+    </div>
 
-            <div class="form-group full-width">
-                <label for="accomplishments">
-                    <i class="fa-regular fa-circle-check"></i> Accomplishments / Tasks Completed
-                    <span class="required">*</span>
-                </label>
-                <textarea id="accomplishments" name="accomplishments" 
-                          placeholder="List the tasks you completed today..." 
-                          required><?php echo isset($_POST['accomplishments']) ? htmlspecialchars($_POST['accomplishments']) : ''; ?></textarea>
-            </div>
-
-            <div class="form-group full-width">
-                <label for="issues">
-                    <i class="fa-regular fa-triangle-exclamation"></i> Issues or Challenges Encountered
-                </label>
-                <textarea id="issues" name="issues" 
-                          placeholder="Describe any problems or challenges you faced (if none, type 'None')"><?php echo isset($_POST['issues']) ? htmlspecialchars($_POST['issues']) : ''; ?></textarea>
-                <span class="field-hint">Optional - leave blank or type 'None' if no issues</span>
-            </div>
-
-            <div class="form-actions">
-                <button type="submit" name="submit_dpr" class="btn-submit">
-                    <i class="fa-regular fa-paper-plane"></i>
-                    Submit Report
-                </button>
-                <button type="button" class="btn-cancel" onclick="closeSidebar()">
-                    Cancel
-                </button>
-            </div>
-        </form>
+    <!-- ===== TOAST ===== -->
+    <div class="toast" id="toast">
+        <i class="fa-regular fa-circle-check"></i>
+        <span id="toastMessage">Success!</span>
     </div>
 
     <script>
-        // Open the right sidebar
-        function openSidebar() {
-            document.getElementById('rightSidebar').classList.add('open');
-            document.getElementById('overlay').classList.add('active');
+        (function() {
+            // DOM elements
+            const modal = document.getElementById('dprModal');
+            const openBtn = document.getElementById('openModalBtn');
+            const closeBtns = document.getElementById('closeModalBtn');
+            const closeBtn2 = document.getElementById('closeModalBtn2');
+            const form = document.getElementById('dprForm');
+            const tbody = document.getElementById('dprTableBody');
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+
+            // Task modal elements
+            const taskModal = document.getElementById('taskModal');
+            const closeTaskBtns = document.getElementById('closeTaskBtn');
+            const closeTaskBtn2 = document.getElementById('closeTaskBtn2');
+            const taskDate = document.getElementById('taskDate');
+            const taskTime = document.getElementById('taskTime');
+            const taskTextDisplay = document.getElementById('taskTextDisplay');
+
+            // Feedback modal elements
+            const feedbackModal = document.getElementById('feedbackModal');
+            const closeFeedbackBtns = document.getElementById('closeFeedbackBtn');
+            const closeFeedbackBtn2 = document.getElementById('closeFeedbackBtn2');
+            const feedbackDate = document.getElementById('feedbackDate');
+            const feedbackTask = document.getElementById('feedbackTask');
+            const feedbackTextDisplay = document.getElementById('feedbackTextDisplay');
+
+            // Form fields
+            const dateInput = document.getElementById('entryDate');
+            const timeInInput = document.getElementById('entryTimeIn');
+            const timeOutInput = document.getElementById('entryTimeOut');
+            const tasksInput = document.getElementById('entryTasks');
+            const feedbackInput = document.getElementById('entryFeedback');
+            const statusSelect = document.getElementById('entryStatus');
+
+            // Set default date to today
+            const today = new Date().toISOString().slice(0, 10);
+            dateInput.value = today;
+
+            // ----- Modal controls -----
+            function openModal() {
+                modal.classList.add('active');
+                document.body.style.overflow = 'hidden';
+                dateInput.value = today;
+                timeInInput.value = '';
+                timeOutInput.value = '';
+                tasksInput.value = '';
+                feedbackInput.value = '';
+                statusSelect.value = 'In Progress';
+                setTimeout(() => tasksInput.focus(), 100);
+            }
+
+            function closeModal() {
+                modal.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+
+            openBtn.addEventListener('click', openModal);
+            closeBtns.addEventListener('click', closeModal);
+            closeBtn2.addEventListener('click', closeModal);
+
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) closeModal();
+            });
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    closeModal();
+                }
+            });
+
+            // ----- Task Modal controls -----
+            function openTaskModal(date, time, task) {
+                taskDate.textContent = date || '—';
+                taskTime.textContent = time || '—';
+                
+                if (task && task.trim() !== '') {
+                    taskTextDisplay.textContent = task;
+                    taskTextDisplay.className = 'content-text task-text';
+                } else {
+                    taskTextDisplay.innerHTML = '<span class="empty-text">No task description provided for this entry.</span>';
+                    taskTextDisplay.className = 'content-text task-text';
+                }
+                
+                taskModal.classList.add('active');
+                document.body.style.overflow = 'hidden';
+            }
+
+            function closeTaskModal() {
+                taskModal.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+
+            closeTaskBtns.addEventListener('click', closeTaskModal);
+            closeTaskBtn2.addEventListener('click', closeTaskModal);
+
+            taskModal.addEventListener('click', function(e) {
+                if (e.target === taskModal) closeTaskModal();
+            });
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && taskModal.classList.contains('active')) {
+                    closeTaskModal();
+                }
+            });
+
+            // ----- Feedback Modal controls -----
+            function openFeedbackModal(date, task, feedback) {
+                feedbackDate.textContent = date || '—';
+                feedbackTask.textContent = task || '—';
+                
+                if (feedback && feedback.trim() !== '') {
+                    feedbackTextDisplay.textContent = feedback;
+                    feedbackTextDisplay.className = 'content-text feedback-text';
+                } else {
+                    feedbackTextDisplay.innerHTML = '<span class="empty-text">No feedback provided for this entry.</span>';
+                    feedbackTextDisplay.className = 'content-text feedback-text';
+                }
+                
+                feedbackModal.classList.add('active');
+                document.body.style.overflow = 'hidden';
+            }
+
+            function closeFeedbackModal() {
+                feedbackModal.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+
+            closeFeedbackBtns.addEventListener('click', closeFeedbackModal);
+            closeFeedbackBtn2.addEventListener('click', closeFeedbackModal);
+
+            feedbackModal.addEventListener('click', function(e) {
+                if (e.target === feedbackModal) closeFeedbackModal();
+            });
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && feedbackModal.classList.contains('active')) {
+                    closeFeedbackModal();
+                }
+            });
+
+            // ----- Toast notification -----
+            function showToast(message, type = 'success') {
+                toast.className = 'toast ' + type + ' show';
+                toastMessage.textContent = message;
+                clearTimeout(toast._timeout);
+                toast._timeout = setTimeout(() => {
+                    toast.classList.remove('show');
+                }, 4000);
+            }
+
+            // ----- Format time for display (12-hour) -----
+            function formatTimeForDisplay(timeStr) {
+                if (!timeStr) return '—';
+                const parts = timeStr.split(':');
+                if (parts.length < 2) return timeStr;
+                let hour = parseInt(parts[0]);
+                const minute = parts[1];
+                const ampm = hour >= 12 ? 'PM' : 'AM';
+                hour = hour % 12 || 12;
+                return `${hour}:${minute} ${ampm}`;
+            }
+
+            // ----- Add row to table -----
+            function addRowToTable(entry) {
+                const emptyRow = tbody.querySelector('.empty-row');
+                if (emptyRow) emptyRow.remove();
+
+                const statusClass = entry.status.toLowerCase().replace(' ', '-');
+                const hasTask = entry.tasks && entry.tasks.trim() !== '';
+                const hasFeedback = entry.feedback && entry.feedback.trim() !== '';
+
+                const tr = document.createElement('tr');
+                tr.dataset.id = entry.id || 'temp';
+
+                tr.innerHTML = `
+                    <td class="date-cell">${escapeHtml(entry.date)}</td>
+                    <td>${escapeHtml(entry.timeIn || '—')}</td>
+                    <td>${escapeHtml(entry.timeOut || '—')}</td>
+                    <td>
+                        <button class="view-btn view-btn-task ${hasTask ? '' : 'no-content'}" 
+                                onclick="viewTask('${escapeHtml(entry.id)}', '${escapeHtml(entry.tasks || '')}', '${escapeHtml(entry.date)}', '${escapeHtml(entry.timeIn || '')}', '${escapeHtml(entry.timeOut || '')}')"
+                                ${hasTask ? '' : 'disabled'}>
+                            <i class="fa-regular fa-list-check"></i>
+                            ${hasTask ? 'View Task' : 'No Task'}
+                        </button>
+                    </td>
+                    <td>
+                        <button class="view-btn view-btn-feedback ${hasFeedback ? '' : 'no-content'}" 
+                                onclick="viewFeedback('${escapeHtml(entry.id)}', '${escapeHtml(entry.feedback || '')}', '${escapeHtml(entry.date)}', '${escapeHtml(entry.tasks || '')}')"
+                                ${hasFeedback ? '' : 'disabled'}>
+                            <i class="fa-regular fa-comment"></i>
+                            ${hasFeedback ? 'View Feedback' : 'No Feedback'}
+                        </button>
+                    </td>
+                    <td><span class="badge-status ${statusClass}">${escapeHtml(entry.status)}</span></td>
+                `;
+
+                tbody.insertBefore(tr, tbody.firstChild);
+            }
+
+            function escapeHtml(text) {
+                if (!text) return '';
+                return String(text).replace(/[&<>"]/g, function(m) {
+                    if (m === '&') return '&amp;';
+                    if (m === '<') return '&lt;';
+                    if (m === '>') return '&gt;';
+                    if (m === '"') return '&quot;';
+                    return m;
+                });
+            }
+
+            // ----- Handle form submission -----
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                const date = dateInput.value.trim();
+                if (!date) {
+                    showToast('Please select a date.', 'error');
+                    return;
+                }
+
+                const tasks = tasksInput.value.trim();
+                if (!tasks) {
+                    showToast('Please describe your task accomplished.', 'error');
+                    tasksInput.focus();
+                    return;
+                }
+
+                const timeIn = timeInInput.value;
+                const timeOut = timeOutInput.value;
+                const feedback = feedbackInput.value.trim();
+                const status = statusSelect.value;
+
+                const formData = new FormData();
+                formData.append('action', 'add_dpr');
+                formData.append('date', date);
+                formData.append('time_in', timeIn);
+                formData.append('time_out', timeOut);
+                formData.append('tasks', tasks);
+                formData.append('feedback', feedback);
+                formData.append('status', status);
+
+                const submitBtn = form.querySelector('button[type="submit"]');
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
+                fetch(window.location.href, {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            const newEntry = {
+                                date: formatDateDisplay(date),
+                                timeIn: timeIn ? formatTimeForDisplay(timeIn) : '—',
+                                timeOut: timeOut ? formatTimeForDisplay(timeOut) : '—',
+                                tasks: tasks,
+                                feedback: feedback || '',
+                                status: status
+                            };
+                            addRowToTable(newEntry);
+                            showToast('DPR entry added successfully!', 'success');
+                            closeModal();
+                            // Refresh page to update filter dropdown
+                            setTimeout(() => window.location.reload(), 1000);
+                        } else {
+                            showToast(data.message || 'Failed to add entry.', 'error');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        showToast('An error occurred. Please try again.', 'error');
+                    })
+                    .finally(() => {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = '<i class="fa-regular fa-check"></i> Save Entry';
+                    });
+            });
+
+            toast.addEventListener('click', function() {
+                toast.classList.remove('show');
+            });
+
+        })();
+
+        // ----- Global functions for viewing content -----
+        function viewTask(id, task, date, timeIn, timeOut) {
+            const taskModal = document.getElementById('taskModal');
+            const taskDate = document.getElementById('taskDate');
+            const taskTime = document.getElementById('taskTime');
+            const taskTextDisplay = document.getElementById('taskTextDisplay');
+
+            const timeStr = timeIn && timeOut ? `${formatTimeDisplay(timeIn)} - ${formatTimeDisplay(timeOut)}` : (timeIn ? formatTimeDisplay(timeIn) : '—');
+            
+            taskDate.textContent = date || '—';
+            taskTime.textContent = timeStr || '—';
+            
+            if (task && task.trim() !== '') {
+                taskTextDisplay.textContent = task;
+                taskTextDisplay.className = 'content-text task-text';
+            } else {
+                taskTextDisplay.innerHTML = '<span class="empty-text">No task description provided for this entry.</span>';
+                taskTextDisplay.className = 'content-text task-text';
+            }
+            
+            taskModal.classList.add('active');
             document.body.style.overflow = 'hidden';
         }
 
-        // Close the right sidebar
-        function closeSidebar() {
-            document.getElementById('rightSidebar').classList.remove('open');
-            document.getElementById('overlay').classList.remove('active');
-            document.body.style.overflow = 'auto';
+        function viewFeedback(id, feedback, date, task) {
+            const feedbackModal = document.getElementById('feedbackModal');
+            const feedbackDate = document.getElementById('feedbackDate');
+            const feedbackTask = document.getElementById('feedbackTask');
+            const feedbackTextDisplay = document.getElementById('feedbackTextDisplay');
+
+            feedbackDate.textContent = date || '—';
+            feedbackTask.textContent = task || '—';
+            
+            if (feedback && feedback.trim() !== '') {
+                feedbackTextDisplay.textContent = feedback;
+                feedbackTextDisplay.className = 'content-text feedback-text';
+            } else {
+                feedbackTextDisplay.innerHTML = '<span class="empty-text">No feedback provided for this entry.</span>';
+                feedbackTextDisplay.className = 'content-text feedback-text';
+            }
+            
+            feedbackModal.classList.add('active');
+            document.body.style.overflow = 'hidden';
         }
 
-        // Close sidebar on escape key
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                closeSidebar();
-            }
-        });
+        function formatTimeDisplay(timeStr) {
+            if (!timeStr) return '—';
+            const parts = timeStr.split(':');
+            if (parts.length < 2) return timeStr;
+            let hour = parseInt(parts[0]);
+            const minute = parts[1];
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            hour = hour % 12 || 12;
+            return `${hour}:${minute} ${ampm}`;
+        }
 
-        // Auto-close sidebar after successful submission
-        <?php if ($success_message): ?>
-            setTimeout(function() {
-                closeSidebar();
-            }, 3000);
-        <?php endif; ?>
+        // ----- Format date for display -----
+        function formatDateDisplay(dateStr) {
+            if (!dateStr) return '';
+            const date = new Date(dateStr + 'T00:00:00');
+            const options = { year: 'numeric', month: 'short', day: 'numeric' };
+            return date.toLocaleDateString('en-US', options);
+        }
 
-        // Real-time validation for date and time
+        // ----- Filter functions -----
+        function applyFilters() {
+            const date = document.getElementById('filterDate').value;
+            const status = document.getElementById('filterStatus').value;
+
+            let url = window.location.pathname + '?';
+            if (date) url += 'filter_date=' + date + '&';
+            if (status) url += 'filter_status=' + encodeURIComponent(status) + '&';
+
+            window.location.href = url;
+        }
+
+        function resetFilters() {
+            window.location.href = window.location.pathname;
+        }
+
+        // Enter key for filter
         document.addEventListener('DOMContentLoaded', function() {
-            const dateInput = document.getElementById('date');
-            const timeInInput = document.getElementById('time_in');
-            const timeOutInput = document.getElementById('time_out');
-            
-            // Date validation - only check if within internship period
-            // No future date restriction
-            dateInput.addEventListener('change', function() {
-                const selectedDate = new Date(this.value);
-                const startDate = new Date('<?php echo INTERNSHIP_START_DATE; ?>');
-                const endDate = new Date('<?php echo INTERNSHIP_END_DATE; ?>');
-                endDate.setHours(23, 59, 59);
-                
-                if (selectedDate < startDate || selectedDate > endDate) {
-                    alert('Date must be within the internship period (<?php echo date('M d, Y', strtotime(INTERNSHIP_START_DATE)); ?> - <?php echo date('M d, Y', strtotime(INTERNSHIP_END_DATE)); ?>).');
-                    this.value = '<?php echo date('Y-m-d'); ?>';
-                }
+            const filterDate = document.getElementById('filterDate');
+            const filterStatus = document.getElementById('filterStatus');
+
+            filterDate.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') applyFilters();
             });
-            
-            // Validate time out is after time in
-            timeOutInput.addEventListener('change', function() {
-                const timeIn = timeInInput.value;
-                const timeOut = this.value;
-                
-                if (timeIn && timeOut && timeOut <= timeIn) {
-                    alert('Time out must be after time in.');
-                    this.value = '';
-                }
-            });
-            
-            timeInInput.addEventListener('change', function() {
-                const timeIn = this.value;
-                const timeOut = timeOutInput.value;
-                
-                if (timeIn && timeOut && timeOut <= timeIn) {
-                    alert('Time out must be after time in.');
-                    timeOutInput.value = '';
-                }
+
+            filterStatus.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') applyFilters();
             });
         });
+
+        // ----- PDF Export -----
+        function exportPDF() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF('landscape', 'mm', 'a4');
+
+            // Get table data
+            const table = document.getElementById('dprTable');
+            const rows = table.querySelectorAll('tbody tr');
+
+            // Skip if no data
+            if (rows.length === 0 || rows[0].classList.contains('empty-row')) {
+                alert('No data to export!');
+                return;
+            }
+
+            // Prepare data for PDF
+            const tableData = [];
+            const headers = ['Date', 'Time In', 'Time Out', 'Task Accomplished', 'Student Feedback', 'Status'];
+
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('td');
+                if (cells.length > 0) {
+                    const rowData = [];
+                    cells.forEach(cell => {
+                        let text = cell.textContent.trim();
+                        text = text.replace(/\s+/g, ' ');
+                        rowData.push(text);
+                    });
+                    tableData.push(rowData);
+                }
+            });
+
+            // Add title
+            doc.setFontSize(20);
+            doc.setTextColor(15, 23, 42);
+            doc.setFont('helvetica', 'bold');
+            doc.text('Daily Progress Report', 14, 22);
+
+            // Add student info
+            doc.setFontSize(10);
+            doc.setTextColor(100, 116, 139);
+            doc.setFont('helvetica', 'normal');
+            doc.text('Student: <?php echo htmlspecialchars($fullname); ?>', 14, 30);
+            doc.text('Generated: ' + new Date().toLocaleString(), 14, 36);
+
+            // Add filter info if applied
+            let filterText = '';
+            const filterDate = document.getElementById('filterDate').value;
+            const filterStatus = document.getElementById('filterStatus').value;
+            if (filterDate || filterStatus) {
+                filterText = 'Filtered: ';
+                if (filterDate) filterText += 'Date: ' + filterDate + ' ';
+                if (filterStatus) filterText += 'Status: ' + filterStatus;
+                doc.text(filterText, 14, 42);
+            }
+
+            // AutoTable
+            doc.autoTable({
+                head: [headers],
+                body: tableData,
+                startY: filterText ? 50 : 44,
+                theme: 'striped',
+                styles: {
+                    fontSize: 8,
+                    cellPadding: 3,
+                    overflow: 'linebreak',
+                    lineColor: [226, 232, 240],
+                    lineWidth: 0.1,
+                },
+                headStyles: {
+                    fillColor: [15, 23, 42],
+                    textColor: [255, 255, 255],
+                    fontSize: 8,
+                    fontStyle: 'bold',
+                },
+                alternateRowStyles: {
+                    fillColor: [248, 250, 252],
+                },
+                columnStyles: {
+                    0: { cellWidth: 25 },
+                    1: { cellWidth: 22 },
+                    2: { cellWidth: 22 },
+                    3: { cellWidth: 50 },
+                    4: { cellWidth: 50 },
+                    5: { cellWidth: 25 },
+                },
+                margin: { left: 14, right: 14 },
+                didParseCell: function(data) {
+                    if (data.section === 'body' && data.column.index === 5) {
+                        const status = data.cell.text[0];
+                        if (status === 'Completed') {
+                            data.cell.styles.textColor = [22, 101, 52];
+                        } else if (status === 'In Progress') {
+                            data.cell.styles.textColor = [133, 77, 14];
+                        } else if (status === 'Pending') {
+                            data.cell.styles.textColor = [71, 85, 105];
+                        }
+                    }
+                }
+            });
+
+            // Save PDF
+            doc.save('DPR_Report_' + new Date().toISOString().slice(0, 10) + '.pdf');
+        }
     </script>
 </body>
 </html>

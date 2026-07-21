@@ -86,6 +86,70 @@ function validateBirthdate($birthdate) {
     return $age >= 15;
 }
 
+/**
+ * Ensure DPR-related tables exist (daily_progress_reports, dpr_anomaly_flags, dss_classifications).
+ * Called at the top of any page that works with DPRs.
+ */
+function ensureDprTables($pdo) {
+    // Main DPR table
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS daily_progress_reports (
+            id            INT AUTO_INCREMENT PRIMARY KEY,
+            user_id       INT NOT NULL,
+            report_date   DATE NOT NULL,
+            time_in       TIME NOT NULL,
+            time_out      TIME NOT NULL,
+            activities    TEXT NOT NULL,
+            accomplishments TEXT NOT NULL,
+            issues        TEXT NULL,
+            status        ENUM('submitted','approved','rejected') DEFAULT 'submitted',
+            submitted_at  DATETIME NULL,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_dpr_user (user_id),
+            INDEX idx_dpr_date (report_date),
+            INDEX idx_dpr_submitted (submitted_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL
+    );
+
+    // Anomaly flags for Mv (bulk/late submissions)
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS dpr_anomaly_flags (
+            id            INT AUTO_INCREMENT PRIMARY KEY,
+            student_id    INT NOT NULL,
+            flag_type     ENUM('BULK_SUBMISSION_ANOMALY','LATE_SUBMISSION') NOT NULL,
+            flagged_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            details       TEXT NULL,
+            is_resolved   TINYINT(1) DEFAULT 0,
+            resolved_at   DATETIME NULL,
+            resolved_by   INT NULL,
+            INDEX idx_af_student (student_id),
+            INDEX idx_af_type (flag_type),
+            INDEX idx_af_flagged (flagged_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL
+    );
+
+    // DSS classification table
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS dss_classifications (
+            id              INT AUTO_INCREMENT PRIMARY KEY,
+            student_id      INT NOT NULL,
+            classification  ENUM('AT_RISK','TOP_PERFORMER','NORMAL') NOT NULL DEFAULT 'NORMAL',
+            late_count      INT DEFAULT 0,
+            total_dprs      INT DEFAULT 0,
+            anomaly_count   INT DEFAULT 0,
+            classified_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            notes           TEXT NULL,
+            UNIQUE KEY uq_dss_student (student_id),
+            INDEX idx_dss_class (classification)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL
+    );
+}
+
 function ensureInternshipTables($pdo) {
     $pdo->exec(<<<'SQL'
         CREATE TABLE IF NOT EXISTS jobs (
