@@ -21,9 +21,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     // Get current status and job info to properly manage vacancy slots
     $checkStmt = $pdo->prepare('
-        SELECT a.id, a.status AS current_status, a.job_id, j.slots_available, j.slots_filled
+        SELECT a.id, a.status AS current_status, a.job_id, j.slots_available, j.slots_filled,
+               u.firstname AS student_firstname, u.lastname AS student_lastname
         FROM job_applications a
         INNER JOIN jobs j ON a.job_id = j.id
+        INNER JOIN users u ON a.student_id = u.id
         LEFT JOIN companies c ON j.company_id = c.id
         WHERE a.id = ? AND (c.supervisor_id = ? OR j.created_by = ?)
     ');
@@ -33,6 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if ($appInfo) {
         $oldStatus = $appInfo['current_status'];
         $jobId = $appInfo['job_id'];
+        $studentName = trim(($appInfo['student_firstname'] ?? '') . ' ' . ($appInfo['student_lastname'] ?? ''));
 
         if ($newStatus !== $oldStatus) {
             $pdo->beginTransaction();
@@ -66,14 +69,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
 
                 $pdo->commit();
-                $_SESSION['success'] = "Applicant status successfully changed to '" . ucfirst($newStatus) . "'.";
+                
+                // User-friendly messages
+                $statusDisplay = ucfirst($newStatus);
+                if (!empty($studentName)) {
+                    $_SESSION['toast_message'] = $studentName . ' has been ' . strtolower($statusDisplay) . ' successfully!';
+                } else {
+                    $_SESSION['toast_message'] = 'Applicant has been ' . strtolower($statusDisplay) . ' successfully!';
+                }
+                $_SESSION['toast_type'] = 'success';
             } catch (Exception $e) {
                 $pdo->rollBack();
-                $_SESSION['error'] = 'Failed to update student application: ' . $e->getMessage();
+                $_SESSION['toast_message'] = 'Unable to update applicant status. Please try again.';
+                $_SESSION['toast_type'] = 'error';
             }
+        } else {
+            $_SESSION['toast_message'] = 'No changes made to applicant status.';
+            $_SESSION['toast_type'] = 'info';
         }
     } else {
-        $_SESSION['error'] = 'Application record not found or access restricted.';
+        $_SESSION['toast_message'] = 'Application record not found. Please refresh and try again.';
+        $_SESSION['toast_type'] = 'error';
     }
 
     header('Location: applicant.php');
@@ -136,10 +152,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
 
         $pdo->commit();
-        $_SESSION['success'] = 'Applicant status updated successfully.';
+        $_SESSION['toast_message'] = 'Applicant status updated successfully.';
+        $_SESSION['toast_type'] = 'success';
     } catch (Exception $e) {
         $pdo->rollBack();
-        $_SESSION['error'] = 'Failed to update applicant: ' . $e->getMessage();
+        $_SESSION['toast_message'] = 'Failed to update applicant. Please try again.';
+        $_SESSION['toast_type'] = 'error';
     }
 
     header('Location: applicant.php');
@@ -186,6 +204,11 @@ function getFileIconClass($path) {
     }
     return 'fa-solid fa-file-lines';
 }
+
+// Get toast message and type
+$toastMessage = $_SESSION['toast_message'] ?? '';
+$toastType = $_SESSION['toast_type'] ?? 'success';
+unset($_SESSION['toast_message'], $_SESSION['toast_type']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -203,18 +226,27 @@ function getFileIconClass($path) {
             padding: 0;
         }
 
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
         body {
             background: #f1f5f9;
             font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0f172a;
+            overflow-x: hidden;
         }
 
         .app-shell {
             display: flex;
             min-height: 100vh;
+            max-width: 100vw;
+            overflow-x: hidden;
         }
 
-        /* ----- SIDEBAR ----- */
+        /* ----- SIDEBAR - FIXED/STICKY ----- */
         .sidebar {
             width: 250px;
             background: #0f172a;
@@ -226,6 +258,8 @@ function getFileIconClass($path) {
             height: 100vh;
             padding: 24px 18px 20px;
             flex-shrink: 0;
+            overflow-y: auto;
+            z-index: 100;
         }
 
         .sidebar-brand {
@@ -233,6 +267,7 @@ function getFileIconClass($path) {
             align-items: center;
             gap: 10px;
             margin-bottom: 32px;
+            flex-shrink: 0;
         }
 
         .sidebar-brand i {
@@ -295,6 +330,7 @@ function getFileIconClass($path) {
             margin-top: auto;
             border-top: 1px solid #1e293b;
             padding-top: 18px;
+            flex-shrink: 0;
         }
 
         .logout-btn-side {
@@ -315,31 +351,41 @@ function getFileIconClass($path) {
             color: #f1f5f9;
         }
 
-        /* ----- MAIN CONTENT ----- */
+        /* ----- MAIN CONTENT - SCROLLABLE ----- */
         .main-content {
             flex: 1;
             padding: 0 32px 32px 32px;
             display: flex;
             flex-direction: column;
+            min-width: 0;
+            width: 100%;
+            overflow-y: auto;
+            height: 100vh;
         }
 
         /* ----- TOP HEADER (blue theme matching sidebar) ----- */
         .top-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 32px;
-            background: #0f172a;
-            border-radius: 0;
-            margin: 0 -32px 24px -32px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px;
+    background: #0f172a;
+    margin: 0 -32px 24px -32px;
+    flex-wrap: wrap;
+    gap: 12px;
+    flex-shrink: 0;
+
+    /* ADD THESE */
+    position: sticky;
+    top: 0;
+    z-index: 200; /* higher than .sidebar's z-index: 100 */
+}
 
         .header-left {
             display: flex;
             align-items: center;
             gap: 16px;
+            flex-wrap: wrap;
         }
 
         .header-left h1 {
@@ -365,9 +411,15 @@ function getFileIconClass($path) {
             display: flex;
             align-items: center;
             gap: 20px;
+            flex-wrap: wrap;
         }
 
         /* Notification bell */
+        .notif-bell-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+
         .notif-bell {
             position: relative;
             font-size: 1.3rem;
@@ -454,27 +506,9 @@ function getFileIconClass($path) {
             padding: 24px 28px 32px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.02);
             border: 1px solid #eef2f7;
-            flex: 1;
-        }
-
-        /* Alert messages */
-        .alert {
-            padding: 12px 16px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .alert.success {
-            background: #dcfce7;
-            color: #166534;
-            border: 1px solid #bbf7d0;
-        }
-        .alert.error {
-            background: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            width: 100%;
+            overflow: hidden;
+            flex-shrink: 0;
         }
 
         /* Modals and Overlays */
@@ -545,6 +579,7 @@ function getFileIconClass($path) {
             display: flex;
             align-items: center;
             justify-content: center;
+            flex-shrink: 0;
         }
         
         .modal-close-btn:hover {
@@ -566,23 +601,45 @@ function getFileIconClass($path) {
             justify-content: flex-end;
             gap: 12px;
             background: #fafcff;
+            flex-wrap: wrap;
         }
 
         /* Layout & Table styles */
-        .table-container {
+        .table-wrapper {
             overflow-x: auto;
             margin-top: 16px;
+            -webkit-overflow-scrolling: touch;
+            scroll-behavior: smooth;
+        }
+
+        .table-wrapper::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .table-wrapper::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 3px;
+        }
+
+        .table-wrapper::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+
+        .table-container {
             border-radius: 12px;
             border: 1px solid #e2e8f0;
             background: #ffffff;
             box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+            overflow: hidden;
+            min-width: 0;
+            width: 100%;
         }
         
         .applicant-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.9rem;
-            min-width: 950px;
         }
         
         .applicant-table thead {
@@ -647,6 +704,7 @@ function getFileIconClass($path) {
             font-size: 0.9rem;
             background: #fff;
             width: 100%;
+            box-sizing: border-box;
         }
 
         /* Buttons & Badges */
@@ -756,8 +814,16 @@ function getFileIconClass($path) {
             border-color: #cbd5e1;
         }
 
+        /* ===== ACTION BUTTONS INLINE FIX ===== */
+        .action-buttons-inline {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: nowrap;
+        }
+
         .btn-status-accept {
-            padding: 6px 12px;
+            padding: 5px 12px;
             border-radius: 8px;
             font-size: 11px;
             font-weight: 700;
@@ -769,6 +835,7 @@ function getFileIconClass($path) {
             border: 1.5px solid #10b981;
             background: transparent;
             color: #10b981;
+            white-space: nowrap;
         }
 
         .btn-status-accept:hover {
@@ -779,7 +846,7 @@ function getFileIconClass($path) {
         }
 
         .btn-status-reject {
-            padding: 6px 12px;
+            padding: 5px 12px;
             border-radius: 8px;
             font-size: 11px;
             font-weight: 700;
@@ -791,6 +858,7 @@ function getFileIconClass($path) {
             border: 1.5px solid #ef4444;
             background: transparent;
             color: #ef4444;
+            white-space: nowrap;
         }
 
         .btn-status-reject:hover {
@@ -798,6 +866,13 @@ function getFileIconClass($path) {
             color: #991b1b;
             transform: translateY(-1px);
             box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2);
+        }
+
+        /* Action Column */
+        .action-column {
+            text-align: left;
+            white-space: nowrap;
+            min-width: 180px;
         }
 
         .decision-toolbar {
@@ -889,6 +964,7 @@ function getFileIconClass($path) {
             font-size: 0.95rem;
             font-weight: 600;
             color: #0f172a;
+            word-break: break-word;
         }
 
         .content-section {
@@ -911,6 +987,7 @@ function getFileIconClass($path) {
             border: 1px solid #e2e8f0;
             font-size: 0.9rem;
             color: #334155;
+            word-break: break-word;
         }
 
         /* Document Links */
@@ -966,21 +1043,307 @@ function getFileIconClass($path) {
             color: #64748b;
         }
 
-        @media (max-width: 720px) {
-            .details-grid {
-                grid-template-columns: 1fr;
+        /* ===== TOAST ===== */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 9999;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+        }
+
+        .toast.success {
+            background: #059669;
+        }
+
+        .toast.error {
+            background: #dc2626;
+        }
+
+        .toast.info {
+            background: #2563eb;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        @keyframes slideUp {
+            0% {
+                transform: translateY(30px);
+                opacity: 0.6;
             }
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        @media (max-width: 1024px) {
+            .sidebar {
+                width: 200px;
+                padding: 20px 14px;
+            }
+            
+            .main-content {
+                padding: 0 20px 20px 20px;
+            }
+            
+            .top-header {
+                margin: 0 -20px 20px -20px;
+                padding: 14px 20px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .app-shell {
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: 100%;
+                height: auto;
+                position: relative;
+                top: 0;
+                padding: 16px;
+                flex-direction: row;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 12px;
+                overflow-y: visible;
+            }
+            
+            .sidebar-brand {
+                margin-bottom: 0;
+                flex: 1;
+            }
+            
+            .nav-section {
+                flex-direction: row;
+                flex-wrap: wrap;
+                gap: 4px;
+                flex: 1 1 100%;
+                order: 3;
+            }
+            
+            .nav-item {
+                padding: 8px 12px;
+                font-size: 0.85rem;
+                flex: 1 1 auto;
+                min-width: 100px;
+                justify-content: center;
+            }
+            
+            .sidebar-footer {
+                margin-top: 0;
+                border-top: none;
+                padding-top: 0;
+                order: 2;
+            }
+            
+            .logout-btn-side {
+                padding: 8px 12px;
+                font-size: 0.85rem;
+            }
+            
+            .main-content {
+                padding: 0 16px 16px 16px;
+                height: auto;
+                overflow-y: visible;
+            }
+            
             .top-header {
                 flex-direction: column;
                 align-items: stretch;
                 padding: 12px 16px;
                 margin: 0 -16px 16px -16px;
             }
+            
+            .header-left h1 {
+                font-size: 1.2rem;
+            }
+            
+            .header-left h1 small {
+                display: block;
+                margin-left: 0;
+                font-size: 0.75rem;
+            }
+            
             .header-right {
                 justify-content: flex-start;
+                gap: 12px;
+            }
+            
+            .page-card {
+                padding: 16px;
+                border-radius: 16px;
+            }
+            
+            .details-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .action-buttons-inline {
+                flex-wrap: wrap;
+            }
+            
+            .action-column {
+                min-width: auto;
+            }
+            
+            .toast {
+                bottom: 20px;
+                right: 20px;
+                left: 20px;
+                padding: 14px 18px;
+                font-size: 0.9rem;
+                max-width: none;
+            }
+            
+            .modal-container {
+                max-width: 100%;
+                border-radius: 20px;
+                margin: 10px;
+            }
+            
+            .modal-header {
+                padding: 16px 20px;
+            }
+            
+            .modal-body {
+                padding: 16px 20px;
+            }
+            
+            .modal-footer {
+                padding: 14px 20px;
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .modal-footer .btn-sec-outline,
+            .modal-footer .btn-prim-blue {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .search-box {
+                max-width: 100%;
+            }
+            
+            .decision-toolbar {
+                justify-content: stretch;
+            }
+            
+            .decision-filter {
+                width: 100%;
+                min-width: auto;
+            }
+            
+            .applicant-table {
+                font-size: 0.8rem;
+            }
+            
+            .applicant-table thead th,
+            .applicant-table tbody td {
+                padding: 10px 12px;
+            }
+            
+            .table-wrapper {
+                margin-top: 12px;
+                margin-left: -16px;
+                margin-right: -16px;
+                padding: 0 16px;
+                width: calc(100% + 32px);
             }
         }
-    <?php renderNotifStyles(); ?>
+
+        @media (max-width: 480px) {
+            .sidebar {
+                padding: 12px;
+            }
+            
+            .nav-item {
+                font-size: 0.75rem;
+                padding: 6px 10px;
+                min-width: 70px;
+            }
+            
+            .sidebar-brand h2 {
+                font-size: 1rem;
+            }
+            
+            .top-header {
+                padding: 10px 12px;
+                margin: 0 -12px 12px -12px;
+            }
+            
+            .main-content {
+                padding: 0 12px 12px 12px;
+            }
+            
+            .page-card {
+                padding: 12px;
+            }
+            
+            .applicant-table thead th,
+            .applicant-table tbody td {
+                padding: 8px 10px;
+                font-size: 0.75rem;
+            }
+            
+            .toast {
+                bottom: 12px;
+                right: 12px;
+                left: 12px;
+                padding: 12px 16px;
+                font-size: 0.85rem;
+                border-radius: 12px;
+            }
+            
+            .btn-view {
+                padding: 4px 8px;
+                font-size: 0.7rem;
+            }
+            
+            .btn-status-accept,
+            .btn-status-reject {
+                padding: 4px 8px;
+                font-size: 10px;
+            }
+            
+            .status-chip {
+                padding: 4px 8px;
+                font-size: 0.65rem;
+            }
+            
+            .modal-header h3 {
+                font-size: 1.1rem;
+            }
+            
+            .detail-card {
+                padding: 10px 12px;
+            }
+            
+            .detail-card .val {
+                font-size: 0.85rem;
+            }
+        }
+
+        <?php renderNotifStyles(); ?>
     </style>
 </head>
 <body>
@@ -993,8 +1356,8 @@ function getFileIconClass($path) {
             <nav class="nav-section">
                 <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
                 <a class="nav-item" href="job.php"><i class="fa-solid fa-briefcase"></i> Add Job</a>
-                <a class="nav-item active" href="applicant.php"><i class="fa-solid fa-briefcase"></i> Applicants</a>
-                <a class="nav-item" href="myintern.php"><i class="fa-solid fa-briefcase"></i> My Interns</a>
+                <a class="nav-item active" href="applicant.php"><i class="fa-solid fa-users"></i> Applicants</a>
+                <a class="nav-item" href="myintern.php"><i class="fa-solid fa-user-graduate"></i> My Interns</a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
@@ -1037,27 +1400,12 @@ function getFileIconClass($path) {
                 </div>
             </div>
 
-            <!-- Notifications -->
-            <?php if (isset($_SESSION['success'])): ?>
-                <div class="alert success">
-                    <i class="fa-solid fa-circle-check"></i>
-                    <div><?php echo htmlspecialchars($_SESSION['success']); unset($_SESSION['success']); ?></div>
-                </div>
-            <?php endif; ?>
-            
-            <?php if (isset($_SESSION['error'])): ?>
-                <div class="alert error">
-                    <i class="fa-solid fa-circle-xmark"></i>
-                    <div><?php echo htmlspecialchars($_SESSION['error']); unset($_SESSION['error']); ?></div>
-                </div>
-            <?php endif; ?>
-
             <!-- Table Card -->
             <div class="page-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                     <div>
                         <h2 style="margin: 0; font-size: 1.3rem;">Applied Candidates</h2>
-                        <p style="margin: 4px 0 0; font-size: 0.85rem; color:#64748b;">Review qualification documents, schedule interviews, and update statuses of student applicants.</p>
+                        <p style="margin: 4px 0 0; font-size: 0.85rem; color:#64748b;">Review qualification documents and update statuses of student applicants.</p>
                     </div>
                     <div style="font-size: 0.85rem; font-weight: 600; color: #475569;">
                         Active Applicants: <span style="color:#2563eb; font-weight: 700;"><?php echo count($activeApplicants); ?></span>
@@ -1073,114 +1421,116 @@ function getFileIconClass($path) {
                 </div>
 
                 <?php if (count($activeApplicants) > 0): ?>
-                    <div class="table-container">
-                        <table class="applicant-table" id="applicantsTable">
-                            <thead>
-                                <tr>
-                                    <th>Student Name</th>
-                                    <th>Applied Position</th>
-                                    <th>Company</th>
-                                    <th>Applied Date</th>
-                                    <th>Documents</th>
-                                    <th>Action</th>
-                                    <th style="text-align: center;">Details</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($activeApplicants as $app): ?>
-                                    <?php 
-                                    $appId = (int)$app['id'];
-                                    
-                                    // Build student fullname
-                                    $studentName = $app['student_firstname'] ?? '';
-                                    if (!empty($app['student_middlename'])) {
-                                        $studentName .= ' ' . $app['student_middlename'];
-                                    }
-                                    $studentName .= ' ' . ($app['student_lastname'] ?? '');
-                                    if (!empty($app['student_suffix'])) {
-                                        $studentName .= ' ' . $app['student_suffix'];
-                                    }
-                                    $studentName = trim($studentName);
-                                    if (empty($studentName)) {
-                                        $studentName = $app['student_username'] ?? 'Student';
-                                    }
-                                    ?>
+                    <div class="table-wrapper">
+                        <div class="table-container">
+                            <table class="applicant-table" id="applicantsTable">
+                                <thead>
                                     <tr>
-                                        <td>
-                                            <strong style="color: #0f172a; font-size: 0.95rem;"><?php echo htmlspecialchars($studentName); ?></strong>
-                                            <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
-                                                <i class="fa-regular fa-envelope" style="margin-right: 2px;"></i> <?php echo htmlspecialchars($app['student_email']); ?>
-                                            </div>
-                                        </td>
-                                        <td><?php echo htmlspecialchars($app['job_title']); ?></td>
-                                        <td>
-                                            <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border-radius:999px; font-weight: 600; color:#475569;">
-                                                <?php echo htmlspecialchars($app['company_name']); ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <i class="fa-regular fa-clock" style="color: #94a3b8; margin-right: 4px; font-size: 0.8rem;"></i>
-                                            <?php echo htmlspecialchars(date('M d, Y', strtotime($app['application_date']))); ?>
-                                        </td>
-                                        <td>
-                                             <div style="display: flex; gap: 4px;">
-                                                 <?php if (!empty($app['cv_path'])): ?>
-                                                     <a href="../<?php echo htmlspecialchars($app['cv_path']); ?>" class="doc-link" title="View CV" onclick="event.preventDefault(); openDocViewer(this.href, 'CV - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
-                                                         <i class="<?php echo getFileIconClass($app['cv_path']); ?>"></i> CV
-                                                     </a>
-                                                 <?php endif; ?>
-
-                                                 <?php if (!empty($app['resume_path'])): ?>
-                                                     <a href="../<?php echo htmlspecialchars($app['resume_path']); ?>" class="doc-link" title="View Resume" onclick="event.preventDefault(); openDocViewer(this.href, 'Resume - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
-                                                         <i class="<?php echo getFileIconClass($app['resume_path']); ?>"></i> Res
-                                                     </a>
-                                                 <?php endif; ?>
-
-                                                 <?php if (!empty($app['application_letter_path'])): ?>
-                                                     <a href="../<?php echo htmlspecialchars($app['application_letter_path']); ?>" class="doc-link" title="View Application Letter" onclick="event.preventDefault(); openDocViewer(this.href, 'App Letter - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
-                                                         <i class="<?php echo getFileIconClass($app['application_letter_path']); ?>"></i> Let
-                                                     </a>
-                                                 <?php endif; ?>
-                                             </div>
-                                        </td>
-                                        <td>
-                                            <?php 
-                                            $status = htmlspecialchars($app['status']);
-                                            if ($status === 'withdrawn'): 
-                                            ?>
-                                                <span style="display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; background: #f1f5f9; color: #475569;">
-                                                    Withdrawn
-                                                </span>
-                                            <?php else: ?>
-                                                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                                    <form method="POST" action="applicant.php" style="margin: 0; display: inline;">
-                                                        <input type="hidden" name="action" value="update_status">
-                                                        <input type="hidden" name="application_id" value="<?php echo $appId; ?>">
-                                                        <input type="hidden" name="status" value="accepted">
-                                                        <button type="submit" class="btn-status-accept" title="Accept Candidate">
-                                                            <i class="fa-solid fa-circle-check"></i> Accept
-                                                        </button>
-                                                    </form>
-                                                    <form method="POST" action="applicant.php" style="margin: 0; display: inline;" onsubmit="return confirm('Are you sure you want to reject this applicant?')">
-                                                        <input type="hidden" name="action" value="update_status">
-                                                        <input type="hidden" name="application_id" value="<?php echo $appId; ?>">
-                                                        <input type="hidden" name="status" value="rejected">
-                                                        <button type="submit" class="btn-status-reject" title="Reject Candidate">
-                                                            <i class="fa-solid fa-circle-xmark"></i> Reject
-                                                        </button>
-                                                    </form>
-                                                </div>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td style="text-align: center;">
-                                            <button type="button" class="btn-view" onclick="openDetailsModal(<?php echo $appId; ?>)">
-                                                <i class="fa-solid fa-folder-open"></i> View
-                                            </button>
-                                        </td>
+                                        <th>Student Name</th>
+                                        <th>Applied Position</th>
+                                        <th>Company</th>
+                                        <th>Applied Date</th>
+                                        <th>Documents</th>
+                                        <th class="action-column">Action</th>
+                                        <th style="text-align: center;">Details</th>
                                     </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($activeApplicants as $app): ?>
+                                        <?php 
+                                        $appId = (int)$app['id'];
+                                        
+                                        // Build student fullname
+                                        $studentName = $app['student_firstname'] ?? '';
+                                        if (!empty($app['student_middlename'])) {
+                                            $studentName .= ' ' . $app['student_middlename'];
+                                        }
+                                        $studentName .= ' ' . ($app['student_lastname'] ?? '');
+                                        if (!empty($app['student_suffix'])) {
+                                            $studentName .= ' ' . $app['student_suffix'];
+                                        }
+                                        $studentName = trim($studentName);
+                                        if (empty($studentName)) {
+                                            $studentName = $app['student_username'] ?? 'Student';
+                                        }
+                                        ?>
+                                        <tr>
+                                            <td>
+                                                <strong style="color: #0f172a; font-size: 0.95rem;"><?php echo htmlspecialchars($studentName); ?></strong>
+                                                <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
+                                                    <i class="fa-regular fa-envelope" style="margin-right: 2px;"></i> <?php echo htmlspecialchars($app['student_email']); ?>
+                                                </div>
+                                            </td>
+                                            <td><?php echo htmlspecialchars($app['job_title']); ?></td>
+                                            <td>
+                                                <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border-radius:999px; font-weight: 600; color:#475569;">
+                                                    <?php echo htmlspecialchars($app['company_name']); ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <i class="fa-regular fa-clock" style="color: #94a3b8; margin-right: 4px; font-size: 0.8rem;"></i>
+                                                <?php echo htmlspecialchars(date('M d, Y', strtotime($app['application_date']))); ?>
+                                            </td>
+                                            <td>
+                                                 <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                                                     <?php if (!empty($app['cv_path'])): ?>
+                                                         <a href="../<?php echo htmlspecialchars($app['cv_path']); ?>" class="doc-link" title="View CV" onclick="event.preventDefault(); openDocViewer(this.href, 'CV - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
+                                                             <i class="<?php echo getFileIconClass($app['cv_path']); ?>"></i> CV
+                                                         </a>
+                                                     <?php endif; ?>
+
+                                                     <?php if (!empty($app['resume_path'])): ?>
+                                                         <a href="../<?php echo htmlspecialchars($app['resume_path']); ?>" class="doc-link" title="View Resume" onclick="event.preventDefault(); openDocViewer(this.href, 'Resume - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
+                                                             <i class="<?php echo getFileIconClass($app['resume_path']); ?>"></i> Res
+                                                         </a>
+                                                     <?php endif; ?>
+
+                                                     <?php if (!empty($app['application_letter_path'])): ?>
+                                                         <a href="../<?php echo htmlspecialchars($app['application_letter_path']); ?>" class="doc-link" title="View Application Letter" onclick="event.preventDefault(); openDocViewer(this.href, 'App Letter - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
+                                                             <i class="<?php echo getFileIconClass($app['application_letter_path']); ?>"></i> Let
+                                                         </a>
+                                                     <?php endif; ?>
+                                                 </div>
+                                            </td>
+                                            <td class="action-column">
+                                                <?php 
+                                                $status = htmlspecialchars($app['status']);
+                                                if ($status === 'withdrawn'): 
+                                                ?>
+                                                    <span style="display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; background: #f1f5f9; color: #475569;">
+                                                        Withdrawn
+                                                    </span>
+                                                <?php else: ?>
+                                                    <div class="action-buttons-inline">
+                                                        <form method="POST" action="applicant.php" style="margin: 0; display: inline;">
+                                                            <input type="hidden" name="action" value="update_status">
+                                                            <input type="hidden" name="application_id" value="<?php echo $appId; ?>">
+                                                            <input type="hidden" name="status" value="accepted">
+                                                            <button type="submit" class="btn-status-accept" title="Accept Candidate">
+                                                                <i class="fa-solid fa-circle-check"></i> Accept
+                                                            </button>
+                                                        </form>
+                                                        <form method="POST" action="applicant.php" style="margin: 0; display: inline;" onsubmit="return confirm('Are you sure you want to reject this applicant?')">
+                                                            <input type="hidden" name="action" value="update_status">
+                                                            <input type="hidden" name="application_id" value="<?php echo $appId; ?>">
+                                                            <input type="hidden" name="status" value="rejected">
+                                                            <button type="submit" class="btn-status-reject" title="Reject Candidate">
+                                                                <i class="fa-solid fa-circle-xmark"></i> Reject
+                                                            </button>
+                                                        </form>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td style="text-align: center;">
+                                                <button type="button" class="btn-view" onclick="openDetailsModal(<?php echo $appId; ?>)">
+                                                    <i class="fa-solid fa-folder-open"></i> View
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 <?php else: ?>
                     <div class="empty-state" style="margin-top: 16px;">
@@ -1211,68 +1561,70 @@ function getFileIconClass($path) {
                 </div>
 
                 <?php if (count($decisionApplicants) > 0): ?>
-                    <div class="table-container">
-                        <table class="applicant-table" id="decisionTable">
-                            <thead>
-                                <tr>
-                                    <th>Student Name</th>
-                                    <th>Applied Position</th>
-                                    <th>Company</th>
-                                    <th>Decision Date</th>
-                                    <th>Status</th>
-                                    <th style="text-align: center;">Details</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($decisionApplicants as $app): ?>
-                                    <?php
-                                    $appId = (int)$app['id'];
-
-                                    $studentName = $app['student_firstname'] ?? '';
-                                    if (!empty($app['student_middlename'])) {
-                                        $studentName .= ' ' . $app['student_middlename'];
-                                    }
-                                    $studentName .= ' ' . ($app['student_lastname'] ?? '');
-                                    if (!empty($app['student_suffix'])) {
-                                        $studentName .= ' ' . $app['student_suffix'];
-                                    }
-                                    $studentName = trim($studentName);
-                                    if (empty($studentName)) {
-                                        $studentName = $app['student_username'] ?? 'Student';
-                                    }
-                                    $status = strtolower($app['status'] ?? '');
-                                    ?>
-                                    <tr data-status="<?php echo htmlspecialchars($status); ?>">
-                                        <td>
-                                            <strong style="color: #0f172a; font-size: 0.95rem;"><?php echo htmlspecialchars($studentName); ?></strong>
-                                            <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
-                                                <i class="fa-regular fa-envelope" style="margin-right: 2px;"></i> <?php echo htmlspecialchars($app['student_email']); ?>
-                                            </div>
-                                        </td>
-                                        <td><?php echo htmlspecialchars($app['job_title']); ?></td>
-                                        <td>
-                                            <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border-radius:999px; font-weight: 600; color:#475569;">
-                                                <?php echo htmlspecialchars($app['company_name']); ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <i class="fa-regular fa-clock" style="color: #94a3b8; margin-right: 4px; font-size: 0.8rem;"></i>
-                                            <?php echo htmlspecialchars(date('M d, Y', strtotime($app['updated_at'] ?? $app['application_date']))); ?>
-                                        </td>
-                                        <td>
-                                            <span class="status-chip <?php echo htmlspecialchars($status); ?>">
-                                                <?php echo htmlspecialchars(ucfirst($status)); ?>
-                                            </span>
-                                        </td>
-                                        <td style="text-align: center;">
-                                            <button type="button" class="btn-view" onclick="openDetailsModal(<?php echo $appId; ?>)">
-                                                <i class="fa-solid fa-folder-open"></i> View
-                                            </button>
-                                        </td>
+                    <div class="table-wrapper">
+                        <div class="table-container">
+                            <table class="applicant-table" id="decisionTable">
+                                <thead>
+                                    <tr>
+                                        <th>Student Name</th>
+                                        <th>Applied Position</th>
+                                        <th>Company</th>
+                                        <th>Decision Date</th>
+                                        <th>Status</th>
+                                        <th style="text-align: center;">Details</th>
                                     </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($decisionApplicants as $app): ?>
+                                        <?php
+                                        $appId = (int)$app['id'];
+
+                                        $studentName = $app['student_firstname'] ?? '';
+                                        if (!empty($app['student_middlename'])) {
+                                            $studentName .= ' ' . $app['student_middlename'];
+                                        }
+                                        $studentName .= ' ' . ($app['student_lastname'] ?? '');
+                                        if (!empty($app['student_suffix'])) {
+                                            $studentName .= ' ' . $app['student_suffix'];
+                                        }
+                                        $studentName = trim($studentName);
+                                        if (empty($studentName)) {
+                                            $studentName = $app['student_username'] ?? 'Student';
+                                        }
+                                        $status = strtolower($app['status'] ?? '');
+                                        ?>
+                                        <tr data-status="<?php echo htmlspecialchars($status); ?>">
+                                            <td>
+                                                <strong style="color: #0f172a; font-size: 0.95rem;"><?php echo htmlspecialchars($studentName); ?></strong>
+                                                <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
+                                                    <i class="fa-regular fa-envelope" style="margin-right: 2px;"></i> <?php echo htmlspecialchars($app['student_email']); ?>
+                                                </div>
+                                            </td>
+                                            <td><?php echo htmlspecialchars($app['job_title']); ?></td>
+                                            <td>
+                                                <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border-radius:999px; font-weight: 600; color:#475569;">
+                                                    <?php echo htmlspecialchars($app['company_name']); ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <i class="fa-regular fa-clock" style="color: #94a3b8; margin-right: 4px; font-size: 0.8rem;"></i>
+                                                <?php echo htmlspecialchars(date('M d, Y', strtotime($app['updated_at'] ?? $app['application_date']))); ?>
+                                            </td>
+                                            <td>
+                                                <span class="status-chip <?php echo htmlspecialchars($status); ?>">
+                                                    <?php echo htmlspecialchars(ucfirst($status)); ?>
+                                                </span>
+                                            </td>
+                                            <td style="text-align: center;">
+                                                <button type="button" class="btn-view" onclick="openDetailsModal(<?php echo $appId; ?>)">
+                                                    <i class="fa-solid fa-folder-open"></i> View
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 <?php else: ?>
                     <div class="empty-state" style="margin-top: 16px;">
@@ -1285,7 +1637,7 @@ function getFileIconClass($path) {
         </main>
     </div>
 
-    <!-- DETAILS / VIEW MODAL (Removed interview fields) -->
+    <!-- DETAILS / VIEW MODAL -->
     <div id="detailsModal" class="modal-overlay">
         <div class="modal-container">
             <div class="modal-header">
@@ -1347,12 +1699,7 @@ function getFileIconClass($path) {
                 </div>
 
                 <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; width: 100%; box-sizing: border-box;">
-                    <!-- Left side: Status action buttons -->
-                    <div id="modal_action_buttons" style="display: flex; gap: 8px;">
-                      
-                    </div>
-                    
-                    <!-- Right side: Close button only -->
+                    <div id="modal_action_buttons" style="display: flex; gap: 8px;"></div>
                     <div style="display: flex; gap: 12px; align-items: center;">
                         <button type="button" class="btn-sec-outline" onclick="closeDetailsModal()">Close</button>
                     </div>
@@ -1366,7 +1713,7 @@ function getFileIconClass($path) {
         <div class="modal-container" style="max-width: 900px; height: 90vh;">
             <div class="modal-header">
                 <h3><i class="fa-solid fa-file-lines" style="color: #2563eb;"></i> <span id="docViewerTitle">Document Viewer</span></h3>
-                <div style="display: flex; gap: 10px; align-items: center;">
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                     <a id="docViewerDownloadBtn" href="#" class="btn-view" style="background: #e2e8f0; color: #1e293b;" download>
                         <i class="fa-solid fa-download"></i> Download
                     </a>
@@ -1380,7 +1727,6 @@ function getFileIconClass($path) {
                 </div>
                 <iframe id="docViewerIframe" src="" style="width: 100%; height: 100%; border: none; display: none;" onload="onDocViewerFrameLoaded()"></iframe>
                 
-                <!-- Fallback view for non-previewable files (like doc/docx) -->
                 <div id="docViewerFallback" style="display: none; flex-direction: column; align-items: center; justify-content: center; flex-grow: 1; padding: 40px; text-align: center;">
                     <i class="fa-regular fa-file-word" style="font-size: 64px; color: #2b579a; margin-bottom: 20px;"></i>
                     <h4 style="margin: 0 0 10px; color: #0f172a; font-size: 1.2rem;">Office Document (.doc/.docx)</h4>
@@ -1395,9 +1741,51 @@ function getFileIconClass($path) {
         </div>
     </div>
 
+    <!-- ===== TOAST ===== -->
+    <div class="toast" id="toast">
+        <i class="fa-regular fa-circle-check"></i>
+        <span id="toastMessage">Success!</span>
+    </div>
+
     <!-- Javascript Actions -->
     <script>
         const applicantsList = <?php echo json_encode($applicants); ?>;
+
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            // Set icon based on type
+            const icon = toast.querySelector('i');
+            if (type === 'success') {
+                icon.className = 'fa-regular fa-circle-check';
+            } else if (type === 'error') {
+                icon.className = 'fa-regular fa-circle-xmark';
+            } else if (type === 'info') {
+                icon.className = 'fa-regular fa-circle-info';
+            }
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        // Check for session toast messages
+        <?php if (!empty($toastMessage)): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($toastMessage); ?>', '<?php echo $toastType; ?>');
+            });
+        <?php endif; ?>
+
+        // Toast click to dismiss
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
 
         function openDetailsModal(appId) {
             const app = applicantsList.find(a => parseInt(a.id) === parseInt(appId));
@@ -1494,14 +1882,12 @@ function getFileIconClass($path) {
             downloadBtn.href = filePath;
             fallbackBtn.href = filePath;
 
-            // Check file extension
             const ext = filePath.split('.').pop().toLowerCase();
 
             if (ext === 'pdf') {
                 loading.style.display = 'flex';
                 iframe.style.display = 'none';
                 fallback.style.display = 'none';
-                
                 iframe.src = filePath;
             } else {
                 loading.style.display = 'none';
@@ -1553,7 +1939,6 @@ function getFileIconClass($path) {
                 const tr = trs[i];
                 let display = false;
                 
-                // Read columns: Student Name (with email), Job Title, Company Name
                 const nameCell = tr.cells[0];
                 const titleCell = tr.cells[1];
                 const companyCell = tr.cells[2];

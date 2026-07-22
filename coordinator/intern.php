@@ -216,17 +216,23 @@ $supervisors = $supervisorStmt->fetchAll();
         }
 
         /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        .top-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 32px;
-            background: #0f172a;
-            border-radius: 0;
-            margin: 0 -32px 24px -32px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
+.top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px;
+    background: #0f172a;
+    border-radius: 0;
+    margin: 0 -32px 24px -32px;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    /* ADD THESE */
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
 
         .header-left {
             display: flex;
@@ -646,8 +652,8 @@ $supervisors = $supervisorStmt->fetchAll();
             </div>
             <nav class="nav-section">
                 <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item" href="company.php"><i class="fa-solid fa-building"></i> Company Management</a>
-                <a class="nav-item active" href="intern.php"><i class="fa-solid fa-business-time"></i> Internship Management</a>
+                <a class="nav-item" href="company.php"><i class="fa-solid fa-building"></i> Company </a>
+                <a class="nav-item active" href="intern.php"><i class="fa-solid fa-business-time"></i> Internship </a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>

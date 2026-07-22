@@ -256,17 +256,23 @@ $statuses = ['active', 'inactive'];
         }
 
         /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        .top-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 32px;
-            background: #0f172a;
-            border-radius: 0;
-            margin: 0 -32px 24px -32px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
+.top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px;
+    background: #0f172a;
+    border-radius: 0;
+    margin: 0 -32px 24px -32px;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    /* ADD THESE */
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
 
         .header-left {
             display: flex;
@@ -401,20 +407,6 @@ $statuses = ['active', 'inactive'];
             max-width: 1400px;
             width: 100%;
             margin: 0 auto;
-        }
-
-        .message {
-            background: #d4edda;
-            color: #155724;
-            padding: 15px;
-            border-radius: 12px;
-            margin-bottom: 20px;
-            border-left: 4px solid #28a745;
-        }
-        .message.error {
-            background: #f8d7da;
-            color: #721c24;
-            border-left-color: #dc3545;
         }
 
         .section {
@@ -674,6 +666,52 @@ $statuses = ['active', 'inactive'];
         }
         #profileSidebar .modal-close:hover { color: #333; }
 
+        /* ===== TOAST ===== */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 9999;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+        }
+
+        .toast.success {
+            background: #059669;
+        }
+
+        .toast.error {
+            background: #dc2626;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        @keyframes slideUp {
+            0% {
+                transform: translateY(30px);
+                opacity: 0.6;
+            }
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
         /* ----- RESPONSIVE ----- */
         @media (max-width: 720px) {
             body {
@@ -709,11 +747,27 @@ $statuses = ['active', 'inactive'];
             .modal-content { padding: 20px; margin: 10px; }
             table { font-size: 12px; }
             th, td { padding: 6px 8px; }
+            .toast {
+                bottom: 20px;
+                right: 20px;
+                left: 20px;
+                padding: 14px 18px;
+                font-size: 0.9rem;
+                max-width: none;
+            }
         }
 
         @media (max-width: 480px) {
             .stats-grid {
                 grid-template-columns: 1fr;
+            }
+            .toast {
+                bottom: 12px;
+                right: 12px;
+                left: 12px;
+                padding: 12px 16px;
+                font-size: 0.85rem;
+                border-radius: 12px;
             }
         }
     </style>
@@ -802,6 +856,34 @@ $statuses = ['active', 'inactive'];
             passwordField.type = type;
             confirmField.type = type;
         }
+
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        // Check for session message and show as toast
+        <?php if ($message): 
+            $isError = strpos($message, 'Error:') !== false || strpos($message, 'Failed') !== false;
+        ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($message); ?>', '<?php echo $isError ? 'error' : 'success'; ?>');
+            });
+        <?php endif; ?>
+
+        // Toast click to dismiss
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
     </script>
 </head>
 <body>
@@ -860,14 +942,6 @@ $statuses = ['active', 'inactive'];
         </div>
 
         <div class="container">
-            <?php if ($message): 
-                $isError = strpos($message, 'Error:') !== false || strpos($message, 'Failed') !== false;
-            ?>
-                <div class="message <?php echo $isError ? 'error' : ''; ?>">
-                    <?php echo $message; ?>
-                </div>
-            <?php endif; ?>
-
             <div class="section">
                 <h2>
                     All Users
@@ -1099,6 +1173,12 @@ $statuses = ['active', 'inactive'];
         </div>
         <div id="profileSidebarContent"></div>
     </aside>
+
+    <!-- ===== TOAST ===== -->
+    <div class="toast" id="toast">
+        <i class="fa-regular fa-circle-check"></i>
+        <span id="toastMessage">Success!</span>
+    </div>
 
 </body>
 </html>

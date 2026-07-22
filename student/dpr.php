@@ -259,17 +259,23 @@ function formatDateDisplay($date) {
         }
 
         /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        .top-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 32px;
-            background: #0f172a;
-            border-radius: 0;
-            margin: 0 -32px 24px -32px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
+.top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px;
+    background: #0f172a;
+    border-radius: 0;
+    margin: 0 -32px 24px -32px;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    /* ADD THESE */
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
 
         .header-left {
             display: flex;

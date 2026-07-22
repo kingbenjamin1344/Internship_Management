@@ -304,17 +304,23 @@ foreach ($myApplications as $app) {
         }
 
         /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        .top-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 32px;
-            background: #0f172a;
-            border-radius: 0;
-            margin: 0 -32px 24px -32px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
+.top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px;
+    background: #0f172a;
+    border-radius: 0;
+    margin: 0 -32px 24px -32px;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    /* ADD THESE */
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
 
         .header-left {
             display: flex;
@@ -435,26 +441,6 @@ foreach ($myApplications as $app) {
             box-shadow: 0 4px 20px rgba(0,0,0,0.02);
             border: 1px solid #eef2f7;
             flex: 1;
-        }
-
-        /* Alert messages */
-        .alert {
-            padding: 12px 16px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .alert.success {
-            background: #dcfce7;
-            color: #166534;
-            border: 1px solid #bbf7d0;
-        }
-        .alert.error {
-            background: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
         }
 
         /* Modals and Overlays */
@@ -846,6 +832,7 @@ foreach ($myApplications as $app) {
             transition: all 0.155s ease;
             box-shadow: 0 1px 2px rgba(0,0,0,0.05);
             text-decoration: none;
+            cursor: pointer;
         }
 
         .doc-link:hover {
@@ -854,7 +841,7 @@ foreach ($myApplications as $app) {
         }
 
         .doc-link i {
-            color: #ef4444;
+            color: #2563eb;
         }
 
         .empty-state {
@@ -913,6 +900,169 @@ foreach ($myApplications as $app) {
             box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
         }
 
+        /* ===== TOAST ===== */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 2000;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+        }
+
+        .toast.success {
+            background: #059669;
+        }
+
+        .toast.error {
+            background: #dc2626;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        @keyframes slideUp {
+            0% {
+                transform: translateY(30px);
+                opacity: 0.6;
+            }
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        /* ===== PDF VIEWER MODAL ===== */
+        .pdf-viewer-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(8px);
+            z-index: 3000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .pdf-viewer-overlay.active {
+            display: flex;
+        }
+
+        .pdf-viewer-container {
+            background: #ffffff;
+            width: 100%;
+            max-width: 900px;
+            height: 90vh;
+            border-radius: 20px;
+            box-shadow: 0 40px 80px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            animation: modalSlideUp 0.3s ease;
+            overflow: hidden;
+        }
+
+        .pdf-viewer-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #fafcff;
+            flex-shrink: 0;
+        }
+
+        .pdf-viewer-header h3 {
+            margin: 0;
+            font-size: 1.1rem;
+            color: #0f172a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .pdf-viewer-header h3 i {
+            color: #dc2626;
+        }
+
+        .pdf-viewer-close {
+            background: #f1f5f9;
+            border: none;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            font-size: 20px;
+            color: #64748b;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .pdf-viewer-close:hover {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .pdf-viewer-body {
+            flex: 1;
+            padding: 16px;
+            overflow: hidden;
+            background: #f1f5f9;
+        }
+
+        .pdf-viewer-body iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            border-radius: 12px;
+            background: #ffffff;
+        }
+
+        .pdf-viewer-footer {
+            padding: 12px 24px;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: flex-end;
+            background: #fafcff;
+            flex-shrink: 0;
+        }
+
+        .btn-download {
+            padding: 8px 20px;
+            border-radius: 10px;
+            background: #2563eb;
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 0.85rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-download:hover {
+            background: #1d4ed8;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+        }
+
         @media (max-width: 720px) {
             .details-grid {
                 grid-template-columns: 1fr;
@@ -925,6 +1075,43 @@ foreach ($myApplications as $app) {
             }
             .header-right {
                 justify-content: flex-start;
+            }
+            .toast {
+                bottom: 20px;
+                right: 20px;
+                left: 20px;
+                padding: 14px 18px;
+                font-size: 0.9rem;
+                max-width: none;
+            }
+            .pdf-viewer-container {
+                height: 95vh;
+                max-height: 600px;
+            }
+            .pdf-viewer-header h3 {
+                font-size: 0.95rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .toast {
+                bottom: 12px;
+                right: 12px;
+                left: 12px;
+                padding: 12px 16px;
+                font-size: 0.85rem;
+                border-radius: 12px;
+            }
+            .pdf-viewer-container {
+                height: 95vh;
+                max-height: 500px;
+                border-radius: 12px;
+            }
+            .pdf-viewer-header {
+                padding: 12px 16px;
+            }
+            .pdf-viewer-body {
+                padding: 8px;
             }
         }
     </style>
@@ -939,9 +1126,9 @@ foreach ($myApplications as $app) {
             </div>
             <nav class="nav-section">
                 <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item active" href="apply.php"><i class="fa-solid fa-gauge-high"></i> Apply Job</a>
-                <a class="nav-item" href="applications.php"><i class="fa-solid fa-gauge-high"></i> My Applications</a>
-                <a class="nav-item" href="dpr.php"><i class="fa-solid fa-gauge-high"></i> Daily Progress Report</a>
+                <a class="nav-item active" href="apply.php"><i class="fa-solid fa-briefcase"></i> Apply Job</a>
+                <a class="nav-item" href="applications.php"><i class="fa-solid fa-file-lines"></i> My Applications</a>
+                <a class="nav-item" href="dpr.php"><i class="fa-regular fa-calendar-check"></i> Daily Progress Report</a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
@@ -984,21 +1171,6 @@ foreach ($myApplications as $app) {
                     </div>
                 </div>
             </div>
-
-            <!-- Global Action Alerts -->
-            <?php if (isset($_SESSION['success'])): ?>
-                <div class="alert success">
-                    <i class="fa-solid fa-circle-check"></i>
-                    <div><?php echo $_SESSION['success']; unset($_SESSION['success']); ?></div>
-                </div>
-            <?php endif; ?>
-            
-            <?php if (isset($_SESSION['error'])): ?>
-                <div class="alert error">
-                    <i class="fa-solid fa-circle-xmark"></i>
-                    <div><?php echo $_SESSION['error']; unset($_SESSION['error']); ?></div>
-                </div>
-            <?php endif; ?>
 
             <!-- Available Jobs Card -->
             <div class="page-card">
@@ -1086,7 +1258,7 @@ foreach ($myApplications as $app) {
                                                 
                                                 <?php if ($hasCommittedJob): ?>
                                                     <button class="btn-apply" style="background:#e2e8f0; color:#64748b;" disabled title="You have already committed to a job">
-                                                        <i class="fa-solid fa-lock"></i> Committed
+                                                        <i class="fa-solid fa-lock"></i> 
                                                     </button>
                                                 <?php elseif ($hasApplied): ?>
                                                     <button class="btn-apply" style="background:#f1f5f9; color:#94a3b8;" disabled>
@@ -1156,21 +1328,21 @@ foreach ($myApplications as $app) {
                                         <td>
                                             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                                                 <?php if (!empty($app['cv_path'])): ?>
-                                                    <a href="../<?php echo htmlspecialchars($app['cv_path']); ?>" target="_blank" download class="doc-link" title="Download CV">
+                                                    <span class="doc-link" onclick="viewPDF('<?php echo htmlspecialchars($app['cv_path']); ?>', 'CV')">
                                                         <i class="fa-solid fa-file-pdf"></i> CV
-                                                    </a>
+                                                    </span>
                                                 <?php endif; ?>
 
                                                 <?php if (!empty($app['resume_path'])): ?>
-                                                    <a href="../<?php echo htmlspecialchars($app['resume_path']); ?>" target="_blank" download class="doc-link" title="Download Resume">
+                                                    <span class="doc-link" onclick="viewPDF('<?php echo htmlspecialchars($app['resume_path']); ?>', 'Resume')">
                                                         <i class="fa-solid fa-file-pdf"></i> Resume
-                                                    </a>
+                                                    </span>
                                                 <?php endif; ?>
 
                                                 <?php if (!empty($app['application_letter_path'])): ?>
-                                                    <a href="../<?php echo htmlspecialchars($app['application_letter_path']); ?>" target="_blank" download class="doc-link" title="Download Application Letter">
+                                                    <span class="doc-link" onclick="viewPDF('<?php echo htmlspecialchars($app['application_letter_path']); ?>', 'Application Letter')">
                                                         <i class="fa-solid fa-file-pdf"></i> App Letter
-                                                    </a>
+                                                    </span>
                                                 <?php endif; ?>
                                             </div>
                                         </td>
@@ -1290,10 +1462,120 @@ foreach ($myApplications as $app) {
         </div>
     </div>
 
+    <!-- ===== PDF VIEWER MODAL ===== -->
+    <div class="pdf-viewer-overlay" id="pdfViewer">
+        <div class="pdf-viewer-container">
+            <div class="pdf-viewer-header">
+                <h3><i class="fa-solid fa-file-pdf"></i> <span id="pdfViewerTitle">Document</span></h3>
+                <button type="button" class="pdf-viewer-close" onclick="closePDFViewer()">&times;</button>
+            </div>
+            <div class="pdf-viewer-body">
+                <iframe id="pdfViewerFrame" src=""></iframe>
+            </div>
+            <div class="pdf-viewer-footer">
+                <button class="btn-download" onclick="downloadPDF()">
+                    <i class="fa-solid fa-download"></i> Download
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== TOAST ===== -->
+    <div class="toast" id="toast">
+        <i class="fa-regular fa-circle-check"></i>
+        <span id="toastMessage">Success!</span>
+    </div>
+
     <!-- JavaScript Handling -->
     <script>
         // Inject jobs JSON so we don't do unnecessary AJAX calls
         const jobsList = <?php echo json_encode($jobs); ?>;
+        let currentPdfPath = '';
+        let currentPdfName = '';
+
+        // ===== PDF VIEWER =====
+        function viewPDF(filePath, fileName) {
+            currentPdfPath = filePath;
+            currentPdfName = fileName || 'Document';
+            
+            // Construct the full URL to the PDF
+            const baseUrl = window.location.origin + window.location.pathname.replace('/student/apply.php', '');
+            const pdfUrl = baseUrl + '/' + filePath;
+            
+            document.getElementById('pdfViewerTitle').textContent = fileName || 'Document';
+            document.getElementById('pdfViewerFrame').src = pdfUrl;
+            document.getElementById('pdfViewer').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closePDFViewer() {
+            document.getElementById('pdfViewer').classList.remove('active');
+            document.getElementById('pdfViewerFrame').src = '';
+            document.body.style.overflow = '';
+            currentPdfPath = '';
+            currentPdfName = '';
+        }
+
+        function downloadPDF() {
+            if (currentPdfPath) {
+                const link = document.createElement('a');
+                link.href = currentPdfPath;
+                link.download = currentPdfName + '.pdf';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        }
+
+        // Close PDF viewer on overlay click
+        document.getElementById('pdfViewer').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closePDFViewer();
+            }
+        });
+
+        // Close PDF viewer on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                if (document.getElementById('pdfViewer').classList.contains('active')) {
+                    closePDFViewer();
+                }
+            }
+        });
+
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        // Check for session messages and show as toast
+        <?php if (isset($_SESSION['success'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['success']); ?>', 'success');
+            });
+            <?php unset($_SESSION['success']); ?>
+        <?php endif; ?>
+
+        <?php if (isset($_SESSION['error'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['error']); ?>', 'error');
+            });
+            <?php unset($_SESSION['error']); ?>
+        <?php endif; ?>
+
+        // Toast click to dismiss
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
 
         function openViewModal(jobId) {
             const job = jobsList.find(j => parseInt(j.id) === parseInt(jobId));

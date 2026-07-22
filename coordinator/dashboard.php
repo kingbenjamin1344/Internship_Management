@@ -345,8 +345,8 @@ $role = getUserRole();
             </div>
             <nav class="nav-section">
                 <a class="nav-item active" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item" href="company.php"><i class="fa-solid fa-building"></i> Company Management</a>
-                <a class="nav-item" href="intern.php"><i class="fa-solid fa-business-time"></i> Internship Management</a>
+                <a class="nav-item" href="company.php"><i class="fa-solid fa-building"></i> Company </a>
+                <a class="nav-item" href="intern.php"><i class="fa-solid fa-business-time"></i> Internship </a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>

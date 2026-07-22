@@ -26,11 +26,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $company = $companyStmt->fetch();
 
     if (!$company || $title === '') {
-        $_SESSION['error'] = 'Please choose a valid assigned company and enter a job title.';
+        $_SESSION['toast_message'] = 'Please choose a valid assigned company and enter a job title.';
+        $_SESSION['toast_type'] = 'error';
     } else {
         $stmt = $pdo->prepare('INSERT INTO jobs (company_id, title, description, responsibility, requirements, slots_available, duration_hours, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([$companyId, $title, $description, $responsibility, $requirements, $slotsAvailable, $durationHours, $userId, $userId]);
-        $_SESSION['success'] = 'Internship position created successfully.';
+        $_SESSION['toast_message'] = 'Internship position created successfully!';
+        $_SESSION['toast_type'] = 'success';
     }
 
     header('Location: job.php');
@@ -54,9 +56,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if ($checkStmt->fetch() && $title !== '') {
         $stmt = $pdo->prepare('UPDATE jobs SET company_id = ?, title = ?, description = ?, responsibility = ?, requirements = ?, slots_available = ?, duration_hours = ?, updated_by = ?, updated_at = NOW() WHERE id = ?');
         $stmt->execute([$companyId, $title, $description, $responsibility, $requirements, $slotsAvailable, $durationHours, $userId, $jobId]);
-        $_SESSION['success'] = 'Job updated successfully.';
+        $_SESSION['toast_message'] = 'Job updated successfully!';
+        $_SESSION['toast_type'] = 'success';
     } else {
-        $_SESSION['error'] = 'You do not have permission to update this job or title is empty.';
+        $_SESSION['toast_message'] = 'You do not have permission to update this job or title is empty.';
+        $_SESSION['toast_type'] = 'error';
     }
     
     header('Location: job.php');
@@ -72,9 +76,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if ($checkStmt->fetch()) {
         $deleteStmt = $pdo->prepare('DELETE FROM jobs WHERE id = ?');
         $deleteStmt->execute([$jobId]);
-        $_SESSION['success'] = 'Job deleted successfully.';
+        $_SESSION['toast_message'] = 'Job deleted successfully!';
+        $_SESSION['toast_type'] = 'success';
     } else {
-        $_SESSION['error'] = 'You do not have permission to delete this job.';
+        $_SESSION['toast_message'] = 'You do not have permission to delete this job.';
+        $_SESSION['toast_type'] = 'error';
     }
     
     header('Location: job.php');
@@ -97,6 +103,11 @@ $assignedCompanies = $stmt->fetchAll();
 $jobsStmt = $pdo->prepare('SELECT j.*, c.company_name FROM jobs j INNER JOIN companies c ON j.company_id = c.id WHERE c.supervisor_id = ? ORDER BY j.created_at DESC');
 $jobsStmt->execute([$userId]);
 $jobs = $jobsStmt->fetchAll();
+
+// Get toast message and type
+$toastMessage = $_SESSION['toast_message'] ?? '';
+$toastType = $_SESSION['toast_type'] ?? 'success';
+unset($_SESSION['toast_message'], $_SESSION['toast_type']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -114,18 +125,27 @@ $jobs = $jobsStmt->fetchAll();
             padding: 0;
         }
 
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
         body {
             background: #f1f5f9;
             font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0f172a;
+            overflow-x: hidden;
         }
 
         .app-shell {
             display: flex;
             min-height: 100vh;
+            max-width: 100vw;
+            overflow-x: hidden;
         }
 
-        /* ----- SIDEBAR ----- */
+        /* ----- SIDEBAR - FIXED/STICKY ----- */
         .sidebar {
             width: 250px;
             background: #0f172a;
@@ -137,6 +157,8 @@ $jobs = $jobsStmt->fetchAll();
             height: 100vh;
             padding: 24px 18px 20px;
             flex-shrink: 0;
+            overflow-y: auto;
+            z-index: 100;
         }
 
         .sidebar-brand {
@@ -144,6 +166,7 @@ $jobs = $jobsStmt->fetchAll();
             align-items: center;
             gap: 10px;
             margin-bottom: 32px;
+            flex-shrink: 0;
         }
 
         .sidebar-brand i {
@@ -206,6 +229,7 @@ $jobs = $jobsStmt->fetchAll();
             margin-top: auto;
             border-top: 1px solid #1e293b;
             padding-top: 18px;
+            flex-shrink: 0;
         }
 
         .logout-btn-side {
@@ -226,31 +250,42 @@ $jobs = $jobsStmt->fetchAll();
             color: #f1f5f9;
         }
 
-        /* ----- MAIN CONTENT ----- */
+        /* ----- MAIN CONTENT - SCROLLABLE ----- */
         .main-content {
             flex: 1;
             padding: 0 32px 32px 32px;
             display: flex;
             flex-direction: column;
+            min-width: 0;
+            width: 100%;
+            overflow-y: auto;
+            height: 100vh;
         }
 
         /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        .top-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 32px;
-            background: #0f172a;
-            border-radius: 0;
-            margin: 0 -32px 24px -32px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
+.top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px;
+    background: #0f172a;
+    margin: 0 -32px 24px -32px;
+    flex-wrap: wrap;
+    gap: 12px;
+    flex-shrink: 0;
+
+    /* ADD THESE */
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
 
         .header-left {
             display: flex;
             align-items: center;
             gap: 16px;
+            flex-wrap: wrap;
         }
 
         .header-left h1 {
@@ -276,9 +311,9 @@ $jobs = $jobsStmt->fetchAll();
             display: flex;
             align-items: center;
             gap: 20px;
+            flex-wrap: wrap;
         }
 
-        /* Notification bell */
         .notif-bell {
             position: relative;
             font-size: 1.3rem;
@@ -317,7 +352,6 @@ $jobs = $jobsStmt->fetchAll();
             border: 2px solid #0f172a;
         }
 
-        /* User profile chip */
         .user-profile {
             display: flex;
             align-items: center;
@@ -365,59 +399,211 @@ $jobs = $jobsStmt->fetchAll();
             padding: 24px 28px 32px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.02);
             border: 1px solid #eef2f7;
-            flex: 1;
+            width: 100%;
+            overflow: hidden;
+            flex-shrink: 0;
         }
 
-        /* Alert messages */
-        .alert {
-            padding: 12px 16px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            display: flex;
+        .table-wrapper {
+            overflow-x: auto;
+            margin-top: 20px;
+            -webkit-overflow-scrolling: touch;
+            scroll-behavior: smooth;
+        }
+
+        .table-wrapper::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .table-wrapper::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 3px;
+        }
+
+        .table-wrapper::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+
+        .table-container {
+            border-radius: 16px;
+            border: 1px solid #e2e8f0;
+            background: #ffffff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.04);
+            overflow: hidden;
+            min-width: 0;
+            width: 100%;
+        }
+
+        .company-table, .job-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        .company-table thead, .job-table thead {
+            background: #f8fafc;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .company-table thead th, .job-table thead th {
+            padding: 14px 16px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #64748b;
+            white-space: nowrap;
+        }
+
+        .company-table tbody tr, .job-table tbody tr {
+            border-bottom: 1px solid #f1f5f9;
+            transition: background 0.2s ease;
+        }
+
+        .company-table tbody tr:last-child, .job-table tbody tr:last-child {
+            border-bottom: none;
+        }
+
+        .company-table tbody tr:hover, .job-table tbody tr:hover {
+            background: #f8fafc;
+        }
+
+        .company-table tbody td, .job-table tbody td {
+            padding: 14px 16px;
+            vertical-align: middle;
+            color: #1e293b;
+        }
+
+        .company-name-cell {
+            font-weight: 600;
+            color: #0f172a;
+            white-space: nowrap;
+        }
+
+        .badge-cell {
+            display: inline-flex;
             align-items: center;
-            gap: 8px;
-        }
-        .alert.success {
-            background: #dcfce7;
-            color: #166534;
-            border: 1px solid #bbf7d0;
-        }
-        .alert.error {
-            background: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #dbeafe, #eff6ff);
+            color: #1d4ed8;
+            font-weight: 600;
+            font-size: 0.7rem;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
         }
 
-        .table-container { overflow-x: auto; margin-top: 20px; border-radius: 16px; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.04); }
-        .company-table, .job-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; min-width: 1000px; }
-        .company-table thead, .job-table thead { background: #f8fafc; border-bottom: 2px solid #e2e8f0; }
-        .company-table thead th, .job-table thead th { padding: 14px 16px; text-align: left; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; white-space: nowrap; }
-        .company-table tbody tr, .job-table tbody tr { border-bottom: 1px solid #f1f5f9; transition: background 0.2s ease; }
-        .company-table tbody tr:last-child, .job-table tbody tr:last-child { border-bottom: none; }
-        .company-table tbody tr:hover, .job-table tbody tr:hover { background: #f8fafc; }
-        .company-table tbody td, .job-table tbody td { padding: 14px 16px; vertical-align: middle; color: #1e293b; }
-        .company-name-cell { font-weight: 600; color: #0f172a; }
-        .badge-cell { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; background: linear-gradient(135deg, #dbeafe, #eff6ff); color: #1d4ed8; font-weight: 600; font-size: 0.7rem; letter-spacing: 0.3px; white-space: nowrap; }
-        .badge-cell i { font-size: 0.65rem; }
-        .industry-tag { display: inline-block; padding: 3px 12px; background: #f1f5f9; border-radius: 999px; font-size: 0.75rem; font-weight: 600; color: #475569; }
-        .email-link { color: #2563eb; text-decoration: none; font-weight: 400; transition: color 0.2s ease; }
-        .email-link:hover { color: #1d4ed8; text-decoration: underline; }
-        .address-text { font-size: 0.85rem; color: #475569; line-height: 1.4; max-width: 200px; }
-        .empty-state { padding: 60px 20px; text-align: center; background: #fafcff; border: 2px dashed #e2e8f0; border-radius: 24px; margin-top: 20px; }
-        .empty-state i { font-size: 48px; color: #94a3b8; margin-bottom: 16px; opacity: 0.5; }
-        .empty-state h3 { color: #1e293b; margin: 0 0 8px; font-size: 1.2rem; }
-        .empty-state p { color: #94a3b8; margin: 0; }
-        .page-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
-        .company-count { font-size: 0.9rem; color: #94a3b8; font-weight: 500; }
-        .company-count span { color: #1e293b; font-weight: 700; }
-        .action-btn { padding: 10px 20px; border-radius: 999px; border: none; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; transition: background 0.2s ease; }
-        .action-btn:hover { background: #1d4ed8; }
+        .badge-cell i {
+            font-size: 0.65rem;
+        }
+
+        .industry-tag {
+            display: inline-block;
+            padding: 3px 12px;
+            background: #f1f5f9;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #475569;
+            white-space: nowrap;
+        }
+
+        .email-link {
+            color: #2563eb;
+            text-decoration: none;
+            font-weight: 400;
+            transition: color 0.2s ease;
+            word-break: break-all;
+        }
+
+        .email-link:hover {
+            color: #1d4ed8;
+            text-decoration: underline;
+        }
+
+        .address-text {
+            font-size: 0.85rem;
+            color: #475569;
+            line-height: 1.4;
+            max-width: 200px;
+            word-wrap: break-word;
+        }
+
+        .empty-state {
+            padding: 60px 20px;
+            text-align: center;
+            background: #fafcff;
+            border: 2px dashed #e2e8f0;
+            border-radius: 24px;
+            margin-top: 20px;
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            color: #94a3b8;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .empty-state h3 {
+            color: #1e293b;
+            margin: 0 0 8px;
+            font-size: 1.2rem;
+        }
+
+        .empty-state p {
+            color: #94a3b8;
+            margin: 0;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 4px;
+        }
+
+        .company-count {
+            font-size: 0.9rem;
+            color: #94a3b8;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .company-count span {
+            color: #1e293b;
+            font-weight: 700;
+        }
+
+        .action-btn {
+            padding: 10px 20px;
+            border-radius: 999px;
+            border: none;
+            background: #2563eb;
+            color: #fff;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .action-btn:hover {
+            background: #1d4ed8;
+        }
         
+        /* ===== ACTION BUTTONS INLINE FIX ===== */
         .action-buttons {
             display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: nowrap;
         }
+
         .btn-edit, .btn-delete {
             padding: 6px 12px;
             border-radius: 8px;
@@ -429,23 +615,29 @@ $jobs = $jobsStmt->fetchAll();
             display: inline-flex;
             align-items: center;
             gap: 4px;
+            white-space: nowrap;
         }
+
         .btn-edit {
             background: #dbeafe;
             color: #1d4ed8;
         }
+
         .btn-edit:hover {
             background: #bfdbfe;
             transform: translateY(-1px);
         }
+
         .btn-delete {
             background: #fee2e2;
             color: #dc2626;
         }
+
         .btn-delete:hover {
             background: #fecaca;
             transform: translateY(-1px);
         }
+
         .btn-view {
             padding: 4px 12px;
             border-radius: 999px;
@@ -458,9 +650,17 @@ $jobs = $jobsStmt->fetchAll();
             color: #4338ca;
             white-space: nowrap;
         }
+
         .btn-view:hover {
             background: #c7d2fe;
             transform: scale(1.05);
+        }
+        
+        /* Action column */
+        .action-column {
+            text-align: left;
+            white-space: nowrap;
+            min-width: 100px;
         }
         
         /* Modal Styles */
@@ -534,6 +734,7 @@ $jobs = $jobsStmt->fetchAll();
             align-items: center;
             justify-content: center;
             line-height: 1;
+            flex-shrink: 0;
         }
         
         .modal-close-btn:hover {
@@ -621,55 +822,86 @@ $jobs = $jobsStmt->fetchAll();
             gap: 16px;
         }
         
+        /* ===== COMPACT MODAL FOOTER BUTTONS ===== */
         .modal-footer {
-            padding: 16px 32px 28px 32px;
+            padding: 16px 32px 24px 32px;
             border-top: 1px solid #f1f5f9;
             display: flex;
             justify-content: flex-end;
-            gap: 12px;
+            align-items: center;
+            gap: 10px;
             background: #fafcff;
+            flex-direction: row;
+            flex-wrap: wrap;
         }
         
-        .btn-secondary {
-            padding: 12px 24px;
+        .modal-footer .btn-secondary {
+            padding: 8px 20px;
             border-radius: 999px;
             border: 1.5px solid #e2e8f0;
             background: #ffffff;
             color: #475569;
             font-weight: 600;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             cursor: pointer;
             transition: all 0.2s ease;
+            white-space: nowrap;
+            width: auto;
+            min-width: 80px;
+            text-align: center;
+            display: inline-block;
         }
         
-        .btn-secondary:hover {
+        .modal-footer .btn-secondary:hover {
             background: #f1f5f9;
             border-color: #cbd5e1;
         }
         
-        .btn-primary {
-            padding: 12px 28px;
+        .modal-footer .btn-primary {
+            padding: 8px 20px;
             border-radius: 999px;
             border: none;
             background: #2563eb;
             color: #ffffff;
             font-weight: 600;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             cursor: pointer;
             transition: all 0.2s ease;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
+            white-space: nowrap;
+            width: auto;
+            min-width: 80px;
+            justify-content: center;
         }
         
-        .btn-primary:hover {
+        .modal-footer .btn-primary:hover {
             background: #1d4ed8;
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
         }
         
-        .btn-primary:active {
-            transform: translateY(0);
+        .modal-footer .btn-danger {
+            padding: 8px 20px;
+            border-radius: 999px;
+            border: none;
+            background: #dc2626;
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            width: auto;
+            min-width: 80px;
+            text-align: center;
+            display: inline-block;
+        }
+        
+        .modal-footer .btn-danger:hover {
+            background: #b91c1c;
+            transform: translateY(-1px);
         }
         
         /* Delete Confirmation Modal */
@@ -695,21 +927,6 @@ $jobs = $jobsStmt->fetchAll();
         }
         .delete-modal .modal-footer {
             justify-content: center;
-        }
-        .btn-danger {
-            padding: 12px 28px;
-            border-radius: 999px;
-            border: none;
-            background: #dc2626;
-            color: #ffffff;
-            font-weight: 600;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .btn-danger:hover {
-            background: #b91c1c;
-            transform: translateY(-1px);
         }
         
         /* View Modal */
@@ -739,26 +956,356 @@ $jobs = $jobsStmt->fetchAll();
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
+        .view-modal .modal-footer .btn-secondary {
+            min-width: 60px;
+        }
+        
+        /* ===== TOAST ===== */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 9999;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+        }
+
+        .toast.success {
+            background: #059669;
+        }
+
+        .toast.error {
+            background: #dc2626;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        @keyframes slideUp {
+            0% {
+                transform: translateY(30px);
+                opacity: 0.6;
+            }
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        @media (max-width: 1024px) {
+            .sidebar {
+                width: 200px;
+                padding: 20px 14px;
+            }
+            
+            .main-content {
+                padding: 0 20px 20px 20px;
+            }
+            
+            .top-header {
+                margin: 0 -20px 20px -20px;
+                padding: 14px 20px;
+            }
+        }
         
         @media (max-width: 768px) {
-            .table-container { border-radius: 12px; }
-            .company-table, .job-table { font-size: 0.8rem; min-width: 800px; }
-            .company-table thead th, .company-table tbody td, .job-table thead th, .job-table tbody td { padding: 10px 12px; }
+            .app-shell {
+                flex-direction: column;
+            }
             
-            .modal-container { max-width: 100%; border-radius: 20px; }
-            .modal-header { padding: 20px 20px 16px 20px; }
-            .modal-body { padding: 20px 20px 16px 20px; }
-            .modal-footer { padding: 16px 20px 20px 20px; flex-direction: column-reverse; }
-            .modal-footer button { width: 100%; justify-content: center; }
-            .form-row { grid-template-columns: 1fr; gap: 0; }
+            .sidebar {
+                width: 100%;
+                height: auto;
+                position: relative;
+                top: 0;
+                padding: 16px;
+                flex-direction: row;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 12px;
+                overflow-y: visible;
+            }
+            
+            .sidebar-brand {
+                margin-bottom: 0;
+                flex: 1;
+            }
+            
+            .nav-section {
+                flex-direction: row;
+                flex-wrap: wrap;
+                gap: 4px;
+                flex: 1 1 100%;
+                order: 3;
+            }
+            
+            .nav-item {
+                padding: 8px 12px;
+                font-size: 0.85rem;
+                flex: 1 1 auto;
+                min-width: 100px;
+                justify-content: center;
+            }
+            
+            .sidebar-footer {
+                margin-top: 0;
+                border-top: none;
+                padding-top: 0;
+                order: 2;
+            }
+            
+            .logout-btn-side {
+                padding: 8px 12px;
+                font-size: 0.85rem;
+            }
+            
+            .main-content {
+                padding: 0 16px 16px 16px;
+                height: auto;
+                overflow-y: visible;
+            }
+            
             .top-header {
                 flex-direction: column;
                 align-items: stretch;
                 padding: 12px 16px;
                 margin: 0 -16px 16px -16px;
             }
+            
+            .header-left h1 {
+                font-size: 1.2rem;
+            }
+            
+            .header-left h1 small {
+                display: block;
+                margin-left: 0;
+                font-size: 0.75rem;
+            }
+            
             .header-right {
                 justify-content: flex-start;
+                gap: 12px;
+            }
+            
+            .page-card {
+                padding: 16px;
+                border-radius: 16px;
+            }
+            
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .company-count {
+                width: 100%;
+            }
+            
+            .action-btn {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .table-wrapper {
+                margin-top: 12px;
+                margin-left: -16px;
+                margin-right: -16px;
+                padding: 0 16px;
+                width: calc(100% + 32px);
+            }
+            
+            .table-container {
+                border-radius: 12px;
+            }
+            
+            .company-table, .job-table {
+                font-size: 0.8rem;
+            }
+            
+            .company-table thead th, .company-table tbody td, 
+            .job-table thead th, .job-table tbody td {
+                padding: 10px 12px;
+            }
+            
+            .address-text {
+                max-width: 120px;
+            }
+            
+            .modal-container {
+                max-width: 100%;
+                border-radius: 20px;
+                margin: 10px;
+            }
+            
+            .modal-header {
+                padding: 20px 20px 16px 20px;
+            }
+            
+            .modal-body {
+                padding: 20px 20px 16px 20px;
+            }
+            
+            .modal-footer {
+                padding: 14px 20px 18px 20px;
+                display: flex;
+                justify-content: flex-end;
+                gap: 8px;
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+            
+            .modal-footer .btn-secondary,
+            .modal-footer .btn-primary,
+            .modal-footer .btn-danger {
+                padding: 6px 14px;
+                font-size: 0.8rem;
+                min-width: 70px;
+            }
+            
+            .form-row {
+                grid-template-columns: 1fr;
+                gap: 0;
+            }
+            
+            .action-buttons {
+                flex-wrap: nowrap;
+            }
+            
+            .action-column {
+                min-width: auto;
+            }
+            
+            .toast {
+                bottom: 20px;
+                right: 20px;
+                left: 20px;
+                padding: 14px 18px;
+                font-size: 0.9rem;
+                max-width: none;
+            }
+            
+            .modal-overlay {
+                padding: 10px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .sidebar {
+                padding: 12px;
+            }
+            
+            .nav-item {
+                font-size: 0.75rem;
+                padding: 6px 10px;
+                min-width: 70px;
+            }
+            
+            .sidebar-brand h2 {
+                font-size: 1rem;
+            }
+            
+            .top-header {
+                padding: 10px 12px;
+                margin: 0 -12px 12px -12px;
+            }
+            
+            .main-content {
+                padding: 0 12px 12px 12px;
+            }
+            
+            .page-card {
+                padding: 12px;
+            }
+            
+            .company-table thead th, .company-table tbody td, 
+            .job-table thead th, .job-table tbody td {
+                padding: 8px 10px;
+                font-size: 0.75rem;
+            }
+            
+            .toast {
+                bottom: 12px;
+                right: 12px;
+                left: 12px;
+                padding: 12px 16px;
+                font-size: 0.85rem;
+                border-radius: 12px;
+            }
+            
+            .modal-footer {
+                flex-direction: column-reverse;
+                gap: 6px;
+                align-items: stretch;
+            }
+            
+            .modal-footer .btn-secondary,
+            .modal-footer .btn-primary,
+            .modal-footer .btn-danger {
+                width: 100%;
+                justify-content: center;
+                padding: 10px 16px;
+                min-width: 0;
+                font-size: 0.85rem;
+            }
+            
+            .modal-header-left h3 {
+                font-size: 1.1rem;
+            }
+            
+            .modal-header {
+                padding: 16px 16px 12px 16px;
+            }
+            
+            .modal-body {
+                padding: 16px 16px 12px 16px;
+            }
+            
+            .modal-footer {
+                padding: 12px 16px 16px 16px;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+                gap: 4px;
+            }
+            
+            .btn-edit, .btn-delete {
+                padding: 4px 8px;
+                font-size: 0.7rem;
+            }
+            
+            .btn-view {
+                padding: 3px 8px;
+                font-size: 0.65rem;
+            }
+            
+            .badge-cell {
+                padding: 2px 8px;
+                font-size: 0.6rem;
+            }
+            
+            .industry-tag {
+                padding: 2px 8px;
+                font-size: 0.65rem;
+            }
+            
+            .address-text {
+                max-width: 80px;
+                font-size: 0.7rem;
             }
         }
     </style>
@@ -773,8 +1320,8 @@ $jobs = $jobsStmt->fetchAll();
             <nav class="nav-section">
                 <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
                 <a class="nav-item active" href="job.php"><i class="fa-solid fa-briefcase"></i> Add Job</a>
-                <a class="nav-item" href="applicant.php"><i class="fa-solid fa-briefcase"></i> Applicants</a>
-                <a class="nav-item" href="myintern.php"><i class="fa-solid fa-briefcase"></i> My Interns</a>
+                <a class="nav-item" href="applicant.php"><i class="fa-solid fa-users"></i> Applicants</a>
+                <a class="nav-item" href="myintern.php"><i class="fa-solid fa-user-graduate"></i> My Interns</a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
@@ -817,19 +1364,6 @@ $jobs = $jobsStmt->fetchAll();
                 </div>
             </div>
 
-            <?php if (isset($_SESSION['success'])): ?>
-                <div class="alert success">
-                    <i class="fa-solid fa-check-circle"></i>
-                    <?php echo htmlspecialchars($_SESSION['success']); unset($_SESSION['success']); ?>
-                </div>
-            <?php endif; ?>
-            <?php if (isset($_SESSION['error'])): ?>
-                <div class="alert error">
-                    <i class="fa-solid fa-exclamation-circle"></i>
-                    <?php echo htmlspecialchars($_SESSION['error']); unset($_SESSION['error']); ?>
-                </div>
-            <?php endif; ?>
-
             <div class="page-card">
                 <div class="page-header">
                     <div>
@@ -844,54 +1378,56 @@ $jobs = $jobsStmt->fetchAll();
                 </div>
 
                 <?php if (count($assignedCompanies) > 0): ?>
-                    <div class="table-container">
-                        <table class="company-table">
-                            <thead>
-                                <tr>
-                                    <th>Company Name</th>
-                                    <th>Industry</th>
-                                    <th>Contact Person</th>
-                                    <th>Email</th>
-                                    <th>Phone</th>
-                                    <th>Address</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($assignedCompanies as $company): ?>
+                    <div class="table-wrapper">
+                        <div class="table-container">
+                            <table class="company-table">
+                                <thead>
                                     <tr>
-                                        <td class="company-name-cell">
-                                            <i class="fa-solid fa-building" style="color: #2563eb; margin-right: 8px;"></i>
-                                            <?php echo htmlspecialchars($company['company_name']); ?>
-                                        </td>
-                                        <td><span class="industry-tag"><?php echo htmlspecialchars($company['industry']); ?></span></td>
-                                        <td><i class="fa-regular fa-user" style="color: #94a3b8; margin-right: 6px;"></i><?php echo htmlspecialchars($company['contact_person']); ?></td>
-                                        <td>
-                                            <?php if ($company['contact_email']): ?>
-                                                <a href="mailto:<?php echo htmlspecialchars($company['contact_email']); ?>" class="email-link">
-                                                    <i class="fa-regular fa-envelope" style="margin-right: 4px;"></i><?php echo htmlspecialchars($company['contact_email']); ?>
-                                                </a>
-                                            <?php else: ?>
-                                                <span style="color: #94a3b8;">-</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td>
-                                            <?php if ($company['contact_number']): ?>
-                                                <i class="fa-solid fa-phone" style="color: #94a3b8; margin-right: 4px;"></i><?php echo htmlspecialchars($company['contact_number']); ?>
-                                            <?php else: ?>
-                                                <span style="color: #94a3b8;">-</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td>
-                                            <div class="address-text">
-                                                <i class="fa-solid fa-location-dot" style="color: #94a3b8; margin-right: 4px;"></i><?php echo nl2br(htmlspecialchars($company['address'])); ?>
-                                            </div>
-                                        </td>
-                                        <td><span class="badge-cell"><i class="fa-solid fa-circle-check"></i> Assigned</span></td>
+                                        <th>Company Name</th>
+                                        <th>Industry</th>
+                                        <th>Contact Person</th>
+                                        <th>Email</th>
+                                        <th>Phone</th>
+                                        <th>Address</th>
+                                        <th>Status</th>
                                     </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($assignedCompanies as $company): ?>
+                                        <tr>
+                                            <td class="company-name-cell">
+                                                <i class="fa-solid fa-building" style="color: #2563eb; margin-right: 8px;"></i>
+                                                <?php echo htmlspecialchars($company['company_name']); ?>
+                                            </td>
+                                            <td><span class="industry-tag"><?php echo htmlspecialchars($company['industry']); ?></span></td>
+                                            <td><i class="fa-regular fa-user" style="color: #94a3b8; margin-right: 6px;"></i><?php echo htmlspecialchars($company['contact_person']); ?></td>
+                                            <td>
+                                                <?php if ($company['contact_email']): ?>
+                                                    <a href="mailto:<?php echo htmlspecialchars($company['contact_email']); ?>" class="email-link">
+                                                        <i class="fa-regular fa-envelope" style="margin-right: 4px;"></i><?php echo htmlspecialchars($company['contact_email']); ?>
+                                                    </a>
+                                                <?php else: ?>
+                                                    <span style="color: #94a3b8;">-</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <?php if ($company['contact_number']): ?>
+                                                    <i class="fa-solid fa-phone" style="color: #94a3b8; margin-right: 4px;"></i><?php echo htmlspecialchars($company['contact_number']); ?>
+                                                <?php else: ?>
+                                                    <span style="color: #94a3b8;">-</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <div class="address-text">
+                                                    <i class="fa-solid fa-location-dot" style="color: #94a3b8; margin-right: 4px;"></i><?php echo nl2br(htmlspecialchars($company['address'])); ?>
+                                                </div>
+                                            </td>
+                                            <td><span class="badge-cell"><i class="fa-solid fa-circle-check"></i> Assigned</span></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 <?php else: ?>
                     <div class="empty-state">
@@ -914,72 +1450,74 @@ $jobs = $jobsStmt->fetchAll();
                 </div>
 
                 <?php if (count($jobs) > 0): ?>
-                    <div class="table-container">
-                        <table class="job-table">
-                           <thead>
-                                <tr>
-                                    <th>Title</th>
-                                    <th>Company</th>
-                                    <th>Available Slots</th>
-                                    <th>Filled Slots</th>
-                                    <th>Duration</th>
-                                    <th>Created</th>
-                                    <th>Description</th>
-                                    <th>Responsibilities</th>
-                                    <th>Requirements</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($jobs as $job): ?>
+                    <div class="table-wrapper">
+                        <div class="table-container">
+                            <table class="job-table">
+                                <thead>
                                     <tr>
-                                        <td><strong><?php echo htmlspecialchars($job['title']); ?></strong></td>
-                                        <td><?php echo htmlspecialchars($job['company_name']); ?></td>
-                                        <td>
-                                            <?php 
-                                            $available = (int)$job['slots_available'] - (int)$job['slots_filled'];
-                                            $color = $available > 0 ? '#16a34a' : '#dc2626';
-                                            ?>
-                                            <span style="font-weight: 600; color: <?php echo $color; ?>;">
-                                                <?php echo $available; ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <span style="font-weight: 600; color: #2563eb;">
-                                                <?php echo (int)$job['slots_filled']; ?>
-                                            </span>
-                                        </td>
-                                        <td><?php echo (int)$job['duration_hours'] > 0 ? (int)$job['duration_hours'] . ' hrs' : '-'; ?></td>
-                                        <td><?php echo htmlspecialchars(date('M d, Y', strtotime($job['created_at']))); ?></td>
-                                        <td>
-                                            <button class="btn-view" onclick="viewContent('description', <?php echo (int)$job['id']; ?>)">
-                                                <i class="fa-solid fa-file-lines"></i> View
-                                            </button>
-                                        </td>
-                                        <td>
-                                            <button class="btn-view" onclick="viewContent('responsibility', <?php echo (int)$job['id']; ?>)">
-                                                <i class="fa-solid fa-tasks"></i> View
-                                            </button>
-                                        </td>
-                                        <td>
-                                            <button class="btn-view" onclick="viewContent('requirements', <?php echo (int)$job['id']; ?>)">
-                                                <i class="fa-solid fa-list-check"></i> View
-                                            </button>
-                                        </td>
-                                        <td>
-                                            <div class="action-buttons">
-                                                <button class="btn-edit" onclick="editJob(<?php echo (int)$job['id']; ?>)">
-                                                   <i class="fa-solid fa-edit"></i>
-                                                </button>
-                                                <button class="btn-delete" onclick="confirmDelete(<?php echo (int)$job['id']; ?>, '<?php echo htmlspecialchars($job['title']); ?>')">
-                                                     <i class="fa-solid fa-trash-alt"></i>
-                                                </button>
-                                            </div>
-                                        </td>
+                                        <th>Title</th>
+                                        <th>Company</th>
+                                        <th>Available</th>
+                                        <th>Filled</th>
+                                        <th>Duration</th>
+                                        <th>Created</th>
+                                        <th>Description</th>
+                                        <th>Responsibilities</th>
+                                        <th>Requirements</th>
+                                        <th class="action-column">Actions</th>
                                     </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($jobs as $job): ?>
+                                        <tr>
+                                            <td><strong><?php echo htmlspecialchars($job['title']); ?></strong></td>
+                                            <td><?php echo htmlspecialchars($job['company_name']); ?></td>
+                                            <td>
+                                                <?php 
+                                                $available = (int)$job['slots_available'] - (int)$job['slots_filled'];
+                                                $color = $available > 0 ? '#16a34a' : '#dc2626';
+                                                ?>
+                                                <span style="font-weight: 600; color: <?php echo $color; ?>;">
+                                                    <?php echo $available; ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span style="font-weight: 600; color: #2563eb;">
+                                                    <?php echo (int)$job['slots_filled']; ?>
+                                                </span>
+                                            </td>
+                                            <td><?php echo (int)$job['duration_hours'] > 0 ? (int)$job['duration_hours'] . ' hrs' : '-'; ?></td>
+                                            <td><?php echo htmlspecialchars(date('M d, Y', strtotime($job['created_at']))); ?></td>
+                                            <td>
+                                                <button class="btn-view" onclick="viewContent('description', <?php echo (int)$job['id']; ?>)">
+                                                    <i class="fa-solid fa-file-lines"></i>
+                                                </button>
+                                            </td>
+                                            <td>
+                                                <button class="btn-view" onclick="viewContent('responsibility', <?php echo (int)$job['id']; ?>)">
+                                                    <i class="fa-solid fa-tasks"></i>
+                                                </button>
+                                            </td>
+                                            <td>
+                                                <button class="btn-view" onclick="viewContent('requirements', <?php echo (int)$job['id']; ?>)">
+                                                    <i class="fa-solid fa-list-check"></i>
+                                                </button>
+                                            </td>
+                                            <td class="action-column">
+                                                <div class="action-buttons">
+                                                    <button class="btn-edit" onclick="editJob(<?php echo (int)$job['id']; ?>)">
+                                                        <i class="fa-solid fa-edit"></i>
+                                                    </button>
+                                                    <button class="btn-delete" onclick="confirmDelete(<?php echo (int)$job['id']; ?>, '<?php echo htmlspecialchars($job['title']); ?>')">
+                                                        <i class="fa-solid fa-trash-alt"></i>
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 <?php else: ?>
                     <div class="empty-state">
@@ -1180,9 +1718,49 @@ $jobs = $jobsStmt->fetchAll();
         </div>
     </div>
 
+    <!-- ===== TOAST ===== -->
+    <div class="toast" id="toast">
+        <i class="fa-regular fa-circle-check"></i>
+        <span id="toastMessage">Success!</span>
+    </div>
+
     <script>
         // Store job data for view modal
         const jobData = <?php echo json_encode($jobs); ?>;
+
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            // Set icon based on type
+            const icon = toast.querySelector('i');
+            if (type === 'success') {
+                icon.className = 'fa-regular fa-circle-check';
+            } else if (type === 'error') {
+                icon.className = 'fa-regular fa-circle-xmark';
+            }
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        // Check for session toast messages
+        <?php if (!empty($toastMessage)): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($toastMessage); ?>', '<?php echo $toastType; ?>');
+            });
+        <?php endif; ?>
+
+        // Toast click to dismiss
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
         
         function openJobModal() {
             document.getElementById('jobModal').style.display = 'flex';
@@ -1198,7 +1776,7 @@ $jobs = $jobsStmt->fetchAll();
             // Find the job data
             const job = jobData.find(j => j.id === jobId);
             if (!job) {
-                alert('Job not found');
+                showToast('Job not found', 'error');
                 return;
             }
             
@@ -1237,7 +1815,7 @@ $jobs = $jobsStmt->fetchAll();
         function viewContent(type, jobId) {
             const job = jobData.find(j => j.id === jobId);
             if (!job) {
-                alert('Job not found');
+                showToast('Job not found', 'error');
                 return;
             }
             

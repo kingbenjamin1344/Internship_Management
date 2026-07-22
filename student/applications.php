@@ -301,17 +301,23 @@ function getApplicationStatusBadgeClass($status)
         }
 
         /* ----- NEW TOP HEADER (blue theme matching sidebar, full width) ----- */
-        .top-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 32px;
-            background: #0f172a;
-            border-radius: 0;
-            margin: 0 -32px 24px -32px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+        /* ----- NEW TOP HEADER (blue theme matching sidebar, full width) ----- */
+.top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px;
+    background: #0f172a;
+    border-radius: 0;
+    margin: 0 -32px 24px -32px;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    /* ADD THESE */
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
 
         .header-left {
             display: flex;
@@ -848,6 +854,52 @@ function getApplicationStatusBadgeClass($status)
             cursor: not-allowed;
         }
 
+        /* ===== TOAST ===== */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 2000;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+        }
+
+        .toast.success {
+            background: #059669;
+        }
+
+        .toast.error {
+            background: #dc2626;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        @keyframes slideUp {
+            0% {
+                transform: translateY(30px);
+                opacity: 0.6;
+            }
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
         /* ===== RESPONSIVE BREAKPOINTS ===== */
 
         /* Tablets and smaller screens */
@@ -898,6 +950,14 @@ function getApplicationStatusBadgeClass($status)
             .app-table th:nth-child(7),
             .app-table td:nth-child(7) {
                 width: 16%;
+            }
+
+            .toast {
+                bottom: 20px;
+                right: 20px;
+                padding: 14px 20px;
+                font-size: 0.9rem;
+                max-width: 350px;
             }
         }
 
@@ -1089,6 +1149,14 @@ function getApplicationStatusBadgeClass($status)
             .detail-card {
                 padding: 12px;
             }
+
+            .toast {
+                bottom: 16px;
+                right: 16px;
+                padding: 12px 16px;
+                font-size: 0.85rem;
+                max-width: 300px;
+            }
         }
 
         /* Small mobile phones */
@@ -1260,6 +1328,16 @@ function getApplicationStatusBadgeClass($status)
             .modal-footer {
                 flex-direction: column-reverse;
             }
+
+            .toast {
+                bottom: 12px;
+                right: 12px;
+                left: 12px;
+                padding: 12px 16px;
+                font-size: 0.8rem;
+                max-width: none;
+                border-radius: 12px;
+            }
         }
 
         /* Very small screens */
@@ -1314,6 +1392,14 @@ function getApplicationStatusBadgeClass($status)
                 font-size: 0.55rem;
                 padding: 3px 5px;
             }
+
+            .toast {
+                bottom: 10px;
+                right: 10px;
+                left: 10px;
+                padding: 10px 14px;
+                font-size: 0.75rem;
+            }
         }
     </style>
 </head>
@@ -1330,9 +1416,9 @@ function getApplicationStatusBadgeClass($status)
             </div>
             <nav class="nav-section">
                 <a class="nav-item " href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item " href="apply.php"><i class="fa-solid fa-gauge-high"></i> Apply Job</a>
-                <a class="nav-item active" href="applications.php"><i class="fa-solid fa-gauge-high"></i> My Applications</a>
-                <a class="nav-item " href="dpr.php"><i class="fa-solid fa-gauge-high"></i> Daily Progress Report</a>
+                <a class="nav-item " href="apply.php"><i class="fa-solid fa-briefcase"></i> Apply Job</a>
+                <a class="nav-item active" href="applications.php"><i class="fa-solid fa-file-lines"></i> My Applications</a>
+                <a class="nav-item " href="dpr.php"><i class="fa-regular fa-calendar-check"></i> Daily Progress Report</a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
@@ -1384,19 +1470,6 @@ function getApplicationStatusBadgeClass($status)
 
             <!-- PAGE CARD (same as before) -->
             <div class="page-card">
-                <?php if (isset($_SESSION['success'])): ?>
-                    <div class="alert alert-success" style="padding: 12px 16px; border-radius: 12px; background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; margin-bottom: 16px;">
-                        <i class="fa-solid fa-circle-check"></i>
-                        <?php echo htmlspecialchars($_SESSION['success']); unset($_SESSION['success']); ?>
-                    </div>
-                <?php endif; ?>
-                <?php if (isset($_SESSION['error'])): ?>
-                    <div class="alert alert-danger" style="padding: 12px 16px; border-radius: 12px; background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; margin-bottom: 16px;">
-                        <i class="fa-solid fa-circle-exclamation"></i>
-                        <?php echo htmlspecialchars($_SESSION['error']); unset($_SESSION['error']); ?>
-                    </div>
-                <?php endif; ?>
-
                 <div class="page-head">
                     <div>
                         <h2>Submitted Applications</h2>
@@ -1537,6 +1610,12 @@ function getApplicationStatusBadgeClass($status)
         </div>
     </div>
 
+    <!-- ===== TOAST ===== -->
+    <div class="toast" id="toast">
+        <i class="fa-regular fa-circle-check"></i>
+        <span id="toastMessage">Success!</span>
+    </div>
+
     <script>
         const applicationMap = <?php echo json_encode($applicationData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
         const modal = document.getElementById('applicationModal');
@@ -1581,6 +1660,40 @@ function getApplicationStatusBadgeClass($status)
             if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
                 closeSidebar();
             }
+        });
+
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        // Check for session messages and show as toast
+        <?php if (isset($_SESSION['success'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['success']); ?>', 'success');
+            });
+            <?php unset($_SESSION['success']); ?>
+        <?php endif; ?>
+
+        <?php if (isset($_SESSION['error'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['error']); ?>', 'error');
+            });
+            <?php unset($_SESSION['error']); ?>
+        <?php endif; ?>
+
+        // Toast click to dismiss
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
         });
 
         function openApplicationModal(applicationId) {

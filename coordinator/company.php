@@ -286,17 +286,23 @@ $companies = $stmt->fetchAll();
         }
 
         /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        .top-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 32px;
-            background: #0f172a;
-            border-radius: 0;
-            margin: 0 -32px 24px -32px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
+.top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px;
+    background: #0f172a;
+    border-radius: 0;
+    margin: 0 -32px 24px -32px;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    /* ADD THESE */
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
 
         .header-left {
             display: flex;
@@ -420,26 +426,6 @@ $companies = $stmt->fetchAll();
             overflow: hidden;
         }
 
-        /* Alert messages */
-        .alert {
-            padding: 12px 16px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .alert.success {
-            background: #dcfce7;
-            color: #166534;
-            border: 1px solid #bbf7d0;
-        }
-        .alert.error {
-            background: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
-        }
-
         @keyframes modalSlideIn {
             from {
                 opacity: 0;
@@ -462,6 +448,120 @@ $companies = $stmt->fetchAll();
             background: #ffffff !important;
         }
 
+        /* ===== TOAST ===== */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 9999;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+        }
+
+        .toast.success {
+            background: #059669;
+        }
+
+        .toast.error {
+            background: #dc2626;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        @keyframes slideUp {
+            0% {
+                transform: translateY(30px);
+                opacity: 0.6;
+            }
+            100% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        /* ===== ACTION BUTTONS INLINE FIX ===== */
+        .action-buttons {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            flex-wrap: nowrap;
+        }
+
+        .action-buttons .btn-assign {
+            padding: 6px 14px;
+            border-radius: 999px;
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+            transition: all 0.2s ease;
+        }
+
+        .action-buttons .btn-assign:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+        }
+
+        .action-buttons .btn-edit {
+            color: #2563eb;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 6px 8px;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+            font-size: 14px;
+        }
+
+        .action-buttons .btn-edit:hover {
+            background: #e0e7ff;
+        }
+
+        .action-buttons .btn-delete {
+            color: #dc2626;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 6px 8px;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .action-buttons .btn-delete:hover {
+            background: #fee2e2;
+        }
+
+        /* ===== TABLE ACTION COLUMN ===== */
+        .actions-column {
+            text-align: center;
+            white-space: nowrap;
+            width: 180px;
+            min-width: 180px;
+        }
+
         @media (max-width: 720px) {
             .top-header {
                 flex-direction: column;
@@ -471,6 +571,41 @@ $companies = $stmt->fetchAll();
             }
             .header-right {
                 justify-content: flex-start;
+            }
+            .toast {
+                bottom: 20px;
+                right: 20px;
+                left: 20px;
+                padding: 14px 18px;
+                font-size: 0.9rem;
+                max-width: none;
+            }
+            .action-buttons {
+                flex-wrap: wrap;
+            }
+            .actions-column {
+                width: auto;
+                min-width: auto;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .toast {
+                bottom: 12px;
+                right: 12px;
+                left: 12px;
+                padding: 12px 16px;
+                font-size: 0.85rem;
+                border-radius: 12px;
+            }
+            .action-buttons .btn-assign {
+                font-size: 10px;
+                padding: 4px 10px;
+            }
+            .action-buttons .btn-edit,
+            .action-buttons .btn-delete {
+                font-size: 12px;
+                padding: 4px 6px;
             }
         }
     </style>
@@ -484,8 +619,8 @@ $companies = $stmt->fetchAll();
             </div>
             <nav class="nav-section">
                 <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item active" href="company.php"><i class="fa-solid fa-building"></i> Company Management</a>
-                <a class="nav-item" href="intern.php"><i class="fa-solid fa-business-time"></i> Internship Management</a>
+                <a class="nav-item active" href="company.php"><i class="fa-solid fa-building"></i> Company </a>
+                <a class="nav-item" href="intern.php"><i class="fa-solid fa-business-time"></i> Internship </a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
@@ -528,19 +663,6 @@ $companies = $stmt->fetchAll();
                 </div>
             </div>
 
-            <?php if (isset($_SESSION['success'])): ?>
-                <div class="alert success">
-                    <i class="fa-solid fa-check-circle"></i>
-                    <?php echo htmlspecialchars($_SESSION['success']); unset($_SESSION['success']); ?>
-                </div>
-            <?php endif; ?>
-            <?php if (isset($_SESSION['error'])): ?>
-                <div class="alert error">
-                    <i class="fa-solid fa-exclamation-circle"></i>
-                    <?php echo htmlspecialchars($_SESSION['error']); unset($_SESSION['error']); ?>
-                </div>
-            <?php endif; ?>
-
             <div class="page-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid #e9edf2; flex-wrap: wrap; gap: 12px;">
                     <div>
@@ -565,20 +687,18 @@ $companies = $stmt->fetchAll();
                         <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
                             <thead>
                                 <tr>
-                                    <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">ID</th>
                                     <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Company Name</th>
                                     <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Industry</th>
                                     <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Contact Person</th>
                                     <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Email</th>
                                     <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Phone</th>
                                     <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Supervisor</th>
-                                    <th style="text-align: center; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Actions</th>
+                                    <th style="text-align: center; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; width: 180px; min-width: 180px;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($companies as $company): ?>
                                     <tr style="transition: background 0.15s ease;">
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; color: #64748b; font-weight: 500;">#<?php echo $company['id']; ?></td>
                                         <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; color: #1e293b;">
                                             <strong><?php echo htmlspecialchars($company['company_name']); ?></strong>
                                             <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">
@@ -596,13 +716,15 @@ $companies = $stmt->fetchAll();
                                                 <?php echo !empty($company['supervisor_id']) && isset($supervisorNames[$company['supervisor_id']]) ? htmlspecialchars($supervisorNames[$company['supervisor_id']]) : 'Unassigned'; ?>
                                             </span>
                                         </td>
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; text-align: center;">
-                                            <div style="display: flex; justify-content: center; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                                <button type="button" class="assign-supervisor-btn" data-company-id="<?php echo htmlspecialchars($company['id'], ENT_QUOTES); ?>" data-company-name="<?php echo htmlspecialchars($company['company_name'], ENT_QUOTES); ?>" data-supervisor-id="<?php echo htmlspecialchars($company['supervisor_id'] ?? '', ENT_QUOTES); ?>" style="padding: 9px 16px; border-radius: 999px; background: #2563eb; color: #fff; border: none; cursor: pointer;">Assign</button>
-                                                <button type="button" onclick="openEditModal(<?php echo $company['id']; ?>)" style="color: #2563eb; background: none; border: none; cursor: pointer; padding: 6px 10px; border-radius: 8px; transition: all 0.2s ease; font-size: 15px;">
+                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; text-align: center;" class="actions-column">
+                                            <div class="action-buttons">
+                                                <button type="button" class="btn-assign" data-company-id="<?php echo htmlspecialchars($company['id'], ENT_QUOTES); ?>" data-company-name="<?php echo htmlspecialchars($company['company_name'], ENT_QUOTES); ?>" data-supervisor-id="<?php echo htmlspecialchars($company['supervisor_id'] ?? '', ENT_QUOTES); ?>">
+                                                    <i class="fa-solid fa-user-plus"></i> Assign
+                                                </button>
+                                                <button type="button" onclick="openEditModal(<?php echo $company['id']; ?>)" class="btn-edit" title="Edit Company">
                                                     <i class="fa-solid fa-edit"></i>
                                                 </button>
-                                                <a href="?delete=<?php echo $company['id']; ?>" style="color: #dc2626; background: none; border: none; cursor: pointer; padding: 6px 10px; border-radius: 8px; transition: all 0.2s ease; font-size: 15px; text-decoration: none; display: inline-flex; align-items: center;" onclick="return confirm('Are you sure you want to delete this company?')">
+                                                <a href="?delete=<?php echo $company['id']; ?>" class="btn-delete" onclick="return confirm('Are you sure you want to delete this company?')" title="Delete Company">
                                                     <i class="fa-solid fa-trash-alt"></i>
                                                 </a>
                                             </div>
@@ -787,7 +909,47 @@ $companies = $stmt->fetchAll();
         </div>
     </div>
 
+    <!-- ===== TOAST ===== -->
+    <div class="toast" id="toast">
+        <i class="fa-regular fa-circle-check"></i>
+        <span id="toastMessage">Success!</span>
+    </div>
+
     <script>
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        // Check for session messages and show as toast
+        <?php if (isset($_SESSION['success'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['success']); ?>', 'success');
+            });
+            <?php unset($_SESSION['success']); ?>
+        <?php endif; ?>
+
+        <?php if (isset($_SESSION['error'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['error']); ?>', 'error');
+            });
+            <?php unset($_SESSION['error']); ?>
+        <?php endif; ?>
+
+        // Toast click to dismiss
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
+
         // Add Modal Functions
         function openAddModal() {
             document.getElementById('addModal').style.display = 'flex';
@@ -816,7 +978,7 @@ $companies = $stmt->fetchAll();
                     document.body.style.overflow = 'hidden';
                 })
                 .catch(error => {
-                    alert('Error loading company data. Please try again.');
+                    showToast('Error loading company data. Please try again.', 'error');
                 });
         }
 
@@ -850,13 +1012,15 @@ $companies = $stmt->fetchAll();
             document.getElementById('assignSupervisorForm').submit();
         };
 
-        document.querySelectorAll('.assign-supervisor-btn').forEach(function(btn) {
-            btn.addEventListener('click', function() {
-                const companyId = this.dataset.companyId;
-                const companyName = this.dataset.companyName;
-                const supervisorId = this.dataset.supervisorId || '';
+        // Use event delegation for assign buttons
+        document.addEventListener('click', function(e) {
+            const btn = e.target.closest('.btn-assign');
+            if (btn) {
+                const companyId = btn.dataset.companyId;
+                const companyName = btn.dataset.companyName;
+                const supervisorId = btn.dataset.supervisorId || '';
                 openAssignModal(companyId, companyName, supervisorId);
-            });
+            }
         });
 
         function filterSupervisorList(query) {
