@@ -1,0 +1,29 @@
+# .htaccess
+Options -Indexes
+DirectoryIndex index.php login.php
+
+<Files "*.sql">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "*.txt">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "*.log">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<FilesMatch "^\.">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Prevent access to config and includes directories
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(config|includes)/ - [F,L,NC]
+</IfModule>
