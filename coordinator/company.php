@@ -1,6 +1,7 @@
 <?php
 // coordinator/dashboard.php
 require_once __DIR__ . '/../includes/rbac.php';
+require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
 
 // Check if user is coordinator
@@ -8,9 +9,112 @@ checkAccess('coordinator');
 
 $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Coordinator';
 $role = getUserRole();
+$userId = getUserId();
 
-// Database connection
-global $pdo;
+// ===== PROFILE PICTURE SETTINGS =====
+$avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
+$avatarPublicPath = '../assets/uploads/avatars/';
+
+function getUserProfilePicture($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT profile_picture FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        return $stmt->fetchColumn() ?: null;
+    } catch (PDOException $e) {
+        return null;
+    }
+}
+
+// Handle AJAX requests for password change and avatar update
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    // Change password
+    if ($_POST['action'] === 'change_password') {
+        $currentPassword = $_POST['current_password'] ?? '';
+        $newPassword = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
+
+        if (empty($currentPassword) || empty($newPassword) || empty($confirmPassword)) {
+            echo json_encode(['success' => false, 'message' => 'All fields are required.']);
+            exit;
+        }
+        if ($newPassword !== $confirmPassword) {
+            echo json_encode(['success' => false, 'message' => 'New password and confirmation do not match.']);
+            exit;
+        }
+        if (strlen($newPassword) < 8) {
+            echo json_encode(['success' => false, 'message' => 'New password must be at least 8 characters.']);
+            exit;
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT password FROM users WHERE id = ?");
+            $stmt->execute([$userId]);
+            $hash = $stmt->fetchColumn();
+
+            if (!$hash || !password_verify($currentPassword, $hash)) {
+                echo json_encode(['success' => false, 'message' => 'Current password is incorrect.']);
+                exit;
+            }
+
+            $newHash = password_hash($newPassword, PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
+            $stmt->execute([$newHash, $userId]);
+
+            echo json_encode(['success' => true, 'message' => 'Password updated successfully.']);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // Update profile picture
+    if ($_POST['action'] === 'update_avatar' && isset($_FILES['avatar'])) {
+        $file = $_FILES['avatar'];
+        $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+        $maxSize = 2 * 1024 * 1024; // 2MB
+
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            echo json_encode(['success' => false, 'message' => 'Upload failed. Please try again.']);
+            exit;
+        }
+        if (!in_array($file['type'], $allowedTypes)) {
+            echo json_encode(['success' => false, 'message' => 'Only JPG, PNG, WEBP or GIF images are allowed.']);
+            exit;
+        }
+        if ($file['size'] > $maxSize) {
+            echo json_encode(['success' => false, 'message' => 'Image must be smaller than 2MB.']);
+            exit;
+        }
+
+        if (!is_dir($avatarUploadDir)) {
+            @mkdir($avatarUploadDir, 0755, true);
+        }
+
+        $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $newFileName = 'user_' . $userId . '_' . time() . '.' . strtolower($ext);
+        $destination = $avatarUploadDir . $newFileName;
+
+        if (move_uploaded_file($file['tmp_name'], $destination)) {
+            try {
+                $stmt = $pdo->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
+                $stmt->execute([$newFileName, $userId]);
+
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'Profile picture updated.',
+                    'path' => $avatarPublicPath . $newFileName
+                ]);
+            } catch (PDOException $e) {
+                echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+            }
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Could not save the uploaded file.']);
+        }
+        exit;
+    }
+}
 
 // Handle form actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -63,6 +167,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
                         $assignStmt = $pdo->prepare("UPDATE companies SET supervisor_id = ? WHERE id = ?");
                         if ($assignStmt->execute([$supervisorId, $companyId])) {
+                            createSystemNotification(
+                                $pdo,
+                                $supervisorId,
+                                $userId,
+                                'assignment',
+                                'Company Assignment',
+                                'You have been assigned to manage a company.',
+                                'job.php'
+                            );
                             $_SESSION['success'] = 'Supervisor assigned to company successfully.';
                         } else {
                             $_SESSION['error'] = 'Unable to assign supervisor at this time.';
@@ -148,17 +261,26 @@ $companySql .= " ORDER BY created_at DESC";
 $stmt = $pdo->prepare($companySql);
 $stmt->execute($params);
 $companies = $stmt->fetchAll();
+
+// Current profile picture
+$profilePicture = getUserProfilePicture($pdo, $userId);
+$profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Coordinator Dashboard</title>
+    <title>Coordinator - Company Management</title>
     <link rel="stylesheet" href="../assets/styles.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <style>
-        /* ----- Reset / base overrides ----- */
+        /* ============================================================
+           Dark Green (#003300) & Golden Yellow (#FFCC33) theme
+           Sharp card edges, no rounded corners.
+           Header spans full width, flush with top.
+           ============================================================ */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -166,8 +288,8 @@ $companies = $stmt->fetchAll();
         }
 
         body {
-            background: #f1f5f9;
-            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f0f2f5;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0f172a;
         }
 
@@ -176,96 +298,169 @@ $companies = $stmt->fetchAll();
             min-height: 100vh;
         }
 
-        /* ----- SIDEBAR ----- */
+        /* ---- Dark Green Sidebar (now a profile panel) ---- */
         .sidebar {
             width: 250px;
-            background: #0f172a;
+            background: #003300;
             color: #e2e8f0;
             display: flex;
             flex-direction: column;
             position: sticky;
             top: 0;
             height: 100vh;
-            padding: 24px 18px 20px;
+            padding: 28px 18px 20px;
             flex-shrink: 0;
+            border-right: 1px solid #1a4a1a;
+            align-items: center;
+            text-align: center;
         }
 
         .sidebar-brand {
             display: flex;
             align-items: center;
             gap: 10px;
-            margin-bottom: 32px;
+            margin-bottom: 28px;
+            padding: 0 6px;
         }
 
         .sidebar-brand i {
             font-size: 1.6rem;
-            color: #38bdf8;
+            color: #FFCC33;
         }
 
         .sidebar-brand h2 {
             font-size: 1.2rem;
             font-weight: 700;
             letter-spacing: -0.3px;
+            color: #FFCC33;
         }
 
         .sidebar-brand h2 span {
             display: block;
             font-weight: 400;
             font-size: 0.65rem;
-            color: #94a3b8;
+            color: #FFCC33;
+            opacity: 0.8;
             letter-spacing: 0.4px;
             text-transform: uppercase;
         }
 
-        .nav-section {
+        /* ---- Profile panel (sidebar) ---- */
+        .profile-panel {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-            flex: 1;
+            align-items: center;
+            width: 100%;
         }
 
-        .nav-item {
+        .avatar-editable {
+            position: relative;
+            width: 108px;
+            height: 108px;
+            margin-bottom: 16px;
+            cursor: pointer;
+        }
+
+        .avatar-editable .avatar-img,
+        .avatar-editable .avatar-initials {
+            width: 108px;
+            height: 108px;
+            border: 3px solid #FFCC33;
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 10px 14px;
-            border-radius: 12px;
+            justify-content: center;
+            overflow: hidden;
+            background: #FFCC33;
+            color: #003300;
+            font-weight: 700;
+            font-size: 2rem;
+            text-transform: uppercase;
+        }
+
+        .avatar-editable .avatar-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .avatar-editable .avatar-edit-badge {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            width: 32px;
+            height: 32px;
+            background: #003300;
+            border: 2px solid #FFCC33;
+            color: #FFCC33;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            transition: 0.15s;
+        }
+
+        .avatar-editable:hover .avatar-edit-badge {
+            background: #FFCC33;
+            color: #003300;
+        }
+
+        .avatar-editable input[type="file"] {
+            display: none;
+        }
+
+        .profile-panel .name {
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #FFCC33;
+            margin-bottom: 4px;
+            word-break: break-word;
+        }
+
+        .profile-panel .role-label {
+            font-size: 0.75rem;
             color: #cbd5e1;
-            text-decoration: none;
             font-weight: 500;
-            font-size: 0.95rem;
-            transition: all 0.15s;
+            text-transform: capitalize;
+            margin-bottom: 20px;
         }
 
-        .nav-item i {
-            width: 20px;
-            text-align: center;
-            font-size: 1rem;
+        .btn-change-password {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: rgba(255, 204, 51, 0.12);
+            border: 1px solid rgba(255, 204, 51, 0.35);
+            color: #FFCC33;
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
-        .nav-item:hover {
-            background: #1e293b;
-            color: #f1f5f9;
-        }
-
-        .nav-item.active {
-            background: #1e293b;
-            color: #38bdf8;
+        .btn-change-password:hover {
+            background: rgba(255, 204, 51, 0.25);
+            color: #fff;
         }
 
         .sidebar-footer {
             margin-top: auto;
-            border-top: 1px solid #1e293b;
+            border-top: 1px solid rgba(255, 204, 51, 0.3);
             padding-top: 18px;
+            width: 100%;
         }
 
         .logout-btn-side {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 10px;
             padding: 10px 14px;
-            border-radius: 12px;
-            color: #94a3b8;
+            border-radius: 0;
+            color: #cbd5e1;
             text-decoration: none;
             font-weight: 500;
             font-size: 0.9rem;
@@ -273,11 +468,11 @@ $companies = $stmt->fetchAll();
         }
 
         .logout-btn-side:hover {
-            background: #1e293b;
-            color: #f1f5f9;
+            background: rgba(255, 204, 51, 0.2);
+            color: #fff;
         }
 
-        /* ----- MAIN CONTENT ----- */
+        /* ---- Main content ---- */
         .main-content {
             flex: 1;
             padding: 0 32px 32px 32px;
@@ -285,75 +480,134 @@ $companies = $stmt->fetchAll();
             flex-direction: column;
         }
 
-        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-.top-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 16px 32px;
-    background: #0f172a;
-    border-radius: 0;
-    margin: 0 -32px 24px -32px;
-    flex-wrap: wrap;
-    gap: 12px;
-
-    /* ADD THESE */
-    position: sticky;
-    top: 0;
-    z-index: 200;
-}
+        /* ---- Dark Green Top Header (full width, flush) ---- */
+        .top-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 32px;
+            background: #003300;
+            margin: 0 -32px 24px -32px;
+            flex-wrap: wrap;
+            gap: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+        }
 
         .header-left {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 28px;
+            flex-wrap: wrap;
         }
 
         .header-left h1 {
-            font-size: 1.4rem;
+            font-size: 1.25rem;
             font-weight: 700;
-            color: #f8fafc;
+            color: #FFCC33;
             letter-spacing: -0.3px;
+            white-space: nowrap;
         }
 
         .header-left h1 small {
             font-weight: 400;
             font-size: 0.85rem;
-            color: #94a3b8;
+            color: #FFCC33;
+            opacity: 0.8;
             margin-left: 8px;
         }
 
         .header-left h1 i {
-            color: #38bdf8;
+            color: #FFCC33;
             margin-right: 8px;
         }
 
+        .mobile-menu-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: #FFCC33;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+
+        /* ---- Header right with navigation ---- */
         .header-right {
             display: flex;
             align-items: center;
             gap: 20px;
+            flex: 1;
+            justify-content: flex-end;
         }
 
-        /* Notification bell */
+        .header-nav {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .header-nav .nav-item-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 16px;
+            border-radius: 0;
+            color: #cbd5e1;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.88rem;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .header-nav .nav-item-header i {
+            font-size: 0.9rem;
+        }
+
+        .header-nav .nav-item-header:hover {
+            background: rgba(255, 204, 51, 0.2);
+            color: #fff;
+        }
+
+        .header-nav .nav-item-header:hover i {
+            color: #FFCC33;
+        }
+
+        .header-nav .nav-item-header.active {
+            background: #FFCC33;
+            color: #003300;
+            font-weight: 600;
+        }
+
+        .header-nav .nav-item-header.active i {
+            color: #003300;
+        }
+
         .notif-bell {
             position: relative;
             font-size: 1.3rem;
-            color: #e2e8f0;
-            background: rgba(255,255,255,0.08);
+            color: #FFCC33;
+            background: rgba(255, 204, 51, 0.2);
             width: 44px;
             height: 44px;
-            border-radius: 50%;
+            border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
             transition: 0.15s;
             cursor: pointer;
             border: none;
+            flex-shrink: 0;
         }
 
         .notif-bell:hover {
-            background: rgba(255,255,255,0.18);
+            background: rgba(255, 204, 51, 0.4);
             color: #fff;
         }
 
@@ -367,120 +621,332 @@ $companies = $stmt->fetchAll();
             font-weight: 700;
             width: 20px;
             height: 20px;
-            border-radius: 50%;
+            border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            border: 2px solid #0f172a;
+            border: 2px solid #003300;
         }
 
-        /* User profile chip */
-        .user-profile {
+        /* ---- Page card (sharp, bordered) ---- */
+        .page-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            padding: 0;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+            flex: 1;
+            border-radius: 0;
+        }
+
+        .page-card-header {
             display: flex;
+            justify-content: space-between;
             align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid #e9edf2;
+            flex-wrap: wrap;
             gap: 10px;
-            background: rgba(255,255,255,0.08);
-            padding: 4px 16px 4px 6px;
-            border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.12);
-            cursor: default;
-            backdrop-filter: blur(2px);
         }
 
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #3b82f6;
-            color: #fff;
+        .page-card-header h3 {
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 16px;
+            margin: 0;
             display: flex;
             align-items: center;
-            justify-content: center;
+            gap: 8px;
+        }
+
+        .page-card-header h3 i {
+            color: #3b82f6;
+        }
+
+        .page-card-header p {
+            margin: 6px 0 0;
+            color: #64748b;
+            font-size: 0.85rem;
+        }
+
+        .page-card-actions {
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .search-form {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .search-form input[type="search"] {
+            padding: 7px 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+            min-width: 200px;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            font-size: 0.85rem;
+            background: #f8fafc;
+            transition: 0.15s;
+        }
+
+        .search-form input[type="search"]:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        .btn-search {
+            padding: 7px 14px;
+            border-radius: 0;
+            background: #0f172a;
+            color: #fff;
+            border: 1px solid #0f172a;
+            cursor: pointer;
             font-weight: 600;
-            font-size: 1rem;
+            font-size: 0.8rem;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .btn-search:hover {
+            background: #1e293b;
+        }
+
+        .btn-add {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 14px;
+            border-radius: 0;
+            font-weight: 600;
+            font-size: 0.8rem;
+            background: #0f172a;
+            color: #ffffff;
+            border: 1px solid #0f172a;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .btn-add:hover {
+            background: #1e293b;
+        }
+
+        /* ---- Table (compressed) ---- */
+        .table-wrapper {
+            overflow-x: auto;
+            padding: 4px 8px 8px 8px;
+        }
+
+        .company-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+
+        .company-table th {
+            text-align: left;
+            padding: 8px 10px;
+            color: #64748b;
+            font-weight: 600;
+            background: #fafcff;
+            border-bottom: 2px solid #e9edf2;
+            font-size: 0.68rem;
             text-transform: uppercase;
-            flex-shrink: 0;
+            letter-spacing: 0.3px;
         }
 
-        .user-info .name {
+        .company-table td {
+            padding: 7px 10px;
+            border-bottom: 1px solid #f1f5f9;
+            color: #1e293b;
+            vertical-align: middle;
+        }
+
+        .company-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .company-table tbody tr:hover {
+            background: #fafcff;
+        }
+
+        .company-name-cell {
             font-weight: 600;
-            font-size: 0.9rem;
-            color: #f1f5f9;
+            color: #0f172a;
+            font-size: 0.82rem;
         }
 
-        .user-info .role-label {
+        .company-address {
             font-size: 0.7rem;
             color: #94a3b8;
+            margin-top: 1px;
+        }
+
+        .industry-tag {
+            background: #f1f5f9;
+            padding: 2px 10px;
+            border: 1px solid #e2e8f0;
+            font-size: 0.7rem;
             font-weight: 500;
-            text-transform: capitalize;
+            color: #475569;
+            border-radius: 0;
+            display: inline-block;
         }
 
-        /* ----- PAGE CARD ----- */
-        .page-card {
-            background: #fff;
-            border-radius: 24px;
-            padding: 0;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.02);
-            border: 1px solid #eef2f7;
-            flex: 1;
-            overflow: hidden;
-        }
-
-        @keyframes modalSlideIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px) scale(0.95);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0) scale(1);
-            }
-        }
-        
-        button:hover {
-            opacity: 0.9;
-        }
-        
-        input:focus, textarea:focus {
-            outline: none;
-            border-color: #2563eb !important;
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
-            background: #ffffff !important;
-        }
-
-        /* ===== TOAST ===== */
-        .toast {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            background: #0f172a;
-            color: #f1f5f9;
-            padding: 16px 24px;
-            border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            display: none;
+        .supervisor-badge {
+            padding: 3px 10px;
+            border-radius: 0;
+            background: #eef2ff;
+            color: #3730a3;
+            font-size: 0.72rem;
+            display: inline-flex;
             align-items: center;
-            gap: 12px;
-            z-index: 9999;
+            border: 1px solid #a5b4fc;
+        }
+
+        .supervisor-badge.unassigned {
+            background: #f1f5f9;
+            color: #94a3b8;
+            border-color: #e2e8f0;
+        }
+
+        /* ---- Action Buttons (compressed) ---- */
+        .action-buttons {
+            display: flex;
+            gap: 4px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn-assign {
+            padding: 3px 10px;
+            border-radius: 0;
+            font-size: 0.65rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
+            background: #dbeafe;
+            color: #1d4ed8;
+            border-color: #93c5fd;
+        }
+
+        .btn-assign:hover {
+            background: #bfdbfe;
+            transform: scale(1.02);
+        }
+
+        .btn-edit {
+            padding: 3px 8px;
+            border-radius: 0;
+            font-size: 0.65rem;
             font-weight: 500;
-            max-width: 400px;
-            animation: slideUp 0.3s ease;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
+            background: #fef9c3;
+            color: #854d0e;
+            border-color: #facc15;
         }
 
-        .toast.success {
-            background: #059669;
+        .btn-edit:hover {
+            background: #fef08a;
+            transform: scale(1.02);
         }
 
-        .toast.error {
-            background: #dc2626;
+        .btn-delete {
+            padding: 3px 8px;
+            border-radius: 0;
+            font-size: 0.65rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
+            background: #fee2e2;
+            color: #991b1b;
+            border-color: #fca5a5;
+            text-decoration: none;
         }
 
-        .toast.show {
+        .btn-delete:hover {
+            background: #fecaca;
+            transform: scale(1.02);
+        }
+
+        /* ---- Empty State ---- */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #94a3b8;
+        }
+
+        .empty-state i {
+            font-size: 2.5rem;
+            display: block;
+            margin-bottom: 12px;
+            color: #cbd5e1;
+        }
+
+        .empty-state p {
+            font-size: 0.9rem;
+        }
+
+        /* ===== MODAL STYLES (sharp) ===== */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.5);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal-overlay.active {
             display: flex;
         }
 
-        .toast i {
-            font-size: 1.2rem;
+        .modal-container {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            max-width: 560px;
+            width: 100%;
+            padding: 0;
+            box-shadow: 0 40px 60px -20px rgba(0,0,0,0.3);
+            animation: slideUp 0.25s ease;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            border-radius: 0;
+        }
+
+        .modal-container.assign-modal {
+            max-width: 640px;
+        }
+
+        #passwordModal .modal-container {
+            max-width: 480px;
         }
 
         @keyframes slideUp {
@@ -494,143 +960,589 @@ $companies = $stmt->fetchAll();
             }
         }
 
-        /* ===== ACTION BUTTONS INLINE FIX ===== */
-        .action-buttons {
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 20px 24px 14px 24px;
+            border-bottom: 1px solid #f1f5f9;
+            flex-shrink: 0;
+        }
+
+        .modal-header h2 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0;
             display: flex;
             align-items: center;
-            justify-content: center;
-            gap: 6px;
-            flex-wrap: nowrap;
+            gap: 10px;
         }
 
-        .action-buttons .btn-assign {
-            padding: 6px 14px;
-            border-radius: 999px;
-            background: #2563eb;
-            color: #fff;
-            border: none;
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 600;
-            white-space: nowrap;
-            transition: all 0.2s ease;
-        }
-
-        .action-buttons .btn-assign:hover {
-            background: #1d4ed8;
-            transform: translateY(-1px);
-        }
-
-        .action-buttons .btn-edit {
+        .modal-header h2 i {
             color: #2563eb;
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 6px 8px;
-            border-radius: 6px;
-            transition: all 0.2s ease;
-            font-size: 14px;
         }
 
-        .action-buttons .btn-edit:hover {
-            background: #e0e7ff;
+        .modal-header p {
+            margin: 4px 0 0;
+            color: #64748b;
+            font-size: 0.82rem;
         }
 
-        .action-buttons .btn-delete {
-            color: #dc2626;
+        .modal-close-btn {
             background: none;
             border: none;
+            font-size: 1.6rem;
+            color: #94a3b8;
             cursor: pointer;
-            padding: 6px 8px;
-            border-radius: 6px;
-            transition: all 0.2s ease;
-            font-size: 14px;
-            text-decoration: none;
+            padding: 4px 6px;
+            transition: 0.15s;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .modal-close-btn:hover {
+            color: #1e293b;
+        }
+
+        .modal-body {
+            padding: 16px 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .modal-body.assign-body {
+            padding: 14px 20px 0;
+        }
+
+        .modal-body.assign-body .search-box {
+            margin-bottom: 14px;
+        }
+
+        .modal-body.assign-body .search-box input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #d1d9e6;
+            border-radius: 0;
+            font-size: 0.85rem;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #fafcff;
+        }
+
+        .modal-body.assign-body .search-box input:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        .modal-body.assign-body .supervisor-grid {
+            display: grid;
+            gap: 8px;
+            max-height: 280px;
+            overflow-y: auto;
+        }
+
+        .supervisor-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            border: 1px solid #e2e8f0;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            border-radius: 0;
+        }
+
+        .supervisor-item:hover {
+            background: #f8fafc;
+        }
+
+        .supervisor-item input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #2563eb;
+            flex-shrink: 0;
+        }
+
+        .supervisor-item .supervisor-name {
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 0.85rem;
+        }
+
+        .supervisor-item .supervisor-role {
+            color: #64748b;
+            font-size: 0.75rem;
+        }
+
+        .modal-footer {
+            padding: 14px 24px 20px 24px;
+            border-top: 1px solid #f1f5f9;
+            flex-shrink: 0;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .btn-primary {
+            background: #0f172a;
+            border: 1px solid #0f172a;
+            color: #fff;
+            padding: 8px 22px;
+            border-radius: 0;
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             display: inline-flex;
             align-items: center;
+            gap: 6px;
         }
 
-        .action-buttons .btn-delete:hover {
-            background: #fee2e2;
+        .btn-primary:hover:not(:disabled) {
+            background: #1e293b;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
         }
 
-        /* ===== TABLE ACTION COLUMN ===== */
-        .actions-column {
-            text-align: center;
-            white-space: nowrap;
-            width: 180px;
-            min-width: 180px;
+        .btn-secondary {
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            color: #1e293b;
+            padding: 8px 20px;
+            border-radius: 0;
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
-        @media (max-width: 720px) {
+        .btn-secondary:hover {
+            background: #e9edf4;
+        }
+
+        /* ---- Form Styles (compressed) ---- */
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 500;
+            color: #334155;
+            font-size: 0.82rem;
+            margin-bottom: 4px;
+        }
+
+        .form-group label .required {
+            color: #dc2626;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+            font-size: 0.85rem;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            transition: all 0.2s ease;
+            background: #f8fafc;
+            box-sizing: border-box;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .form-row .form-group {
+            margin-bottom: 0;
+        }
+
+        /* ---- Toast ---- */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 14px 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 10px;
+            z-index: 2000;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+            border: 1px solid #334155;
+            border-radius: 0;
+        }
+
+        .toast.success {
+            background: #059669;
+            border-color: #047857;
+        }
+
+        .toast.error {
+            background: #dc2626;
+            border-color: #b91c1c;
+        }
+
+        .toast.warning {
+            background: #d97706;
+            border-color: #b45309;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.1rem;
+        }
+
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+        }
+
+        .sidebar-overlay.show {
+            display: block;
+        }
+
+        /* ---- Responsive ---- */
+        @media (max-width: 1024px) {
+            .page-card-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .page-card-actions {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .search-form {
+                flex-direction: column;
+                width: 100%;
+            }
+            .search-form input[type="search"] {
+                width: 100%;
+                min-width: unset;
+            }
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+            .form-row .form-group {
+                margin-bottom: 14px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                top: 0;
+                left: -280px;
+                width: 280px;
+                height: 100vh;
+                z-index: 1001;
+                transition: left 0.3s ease;
+                overflow-y: auto;
+            }
+
+            .sidebar.open {
+                left: 0;
+            }
+
+            .mobile-menu-toggle {
+                display: block;
+            }
+
             .top-header {
                 flex-direction: column;
                 align-items: stretch;
                 padding: 12px 16px;
                 margin: 0 -16px 16px -16px;
             }
+
+            .header-left {
+                flex-direction: row;
+                align-items: center;
+                gap: 12px;
+                justify-content: space-between;
+                width: 100%;
+            }
+
+            .header-left h1 {
+                font-size: 1.1rem;
+            }
+
             .header-right {
-                justify-content: flex-start;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+                justify-content: center;
+                width: 100%;
             }
-            .toast {
-                bottom: 20px;
-                right: 20px;
-                left: 20px;
-                padding: 14px 18px;
-                font-size: 0.9rem;
-                max-width: none;
-            }
-            .action-buttons {
+
+            .header-nav {
+                width: 100%;
+                justify-content: center;
                 flex-wrap: wrap;
             }
-            .actions-column {
-                width: auto;
-                min-width: auto;
+
+            .header-nav .nav-item-header {
+                padding: 6px 12px;
+                font-size: 0.8rem;
+            }
+
+            .notif-bell {
+                align-self: center;
+            }
+
+            .page-card-header h3 {
+                font-size: 0.95rem;
+            }
+
+            .company-table th,
+            .company-table td {
+                padding: 6px 8px;
+                font-size: 0.72rem;
+            }
+
+            .modal-container {
+                max-height: 95vh;
+                margin: 10px;
+            }
+
+            .modal-header {
+                padding: 14px 16px 10px 16px;
+            }
+
+            .modal-body {
+                padding: 12px 16px;
+            }
+
+            .modal-footer {
+                padding: 10px 16px 14px 16px;
+                flex-direction: column;
+            }
+
+            .modal-footer .btn-primary,
+            .modal-footer .btn-secondary {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .action-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .btn-assign,
+            .btn-edit,
+            .btn-delete {
+                width: 100%;
+                justify-content: center;
+                font-size: 0.6rem;
+                padding: 3px 6px;
+            }
+
+            .supervisor-item {
+                padding: 8px 10px;
+            }
+
+            .modal-body.assign-body .supervisor-grid {
+                max-height: 180px;
+            }
+
+            .industry-tag {
+                font-size: 0.65rem;
+                padding: 2px 6px;
+            }
+
+            .supervisor-badge {
+                font-size: 0.65rem;
+                padding: 2px 6px;
             }
         }
 
         @media (max-width: 480px) {
-            .toast {
-                bottom: 12px;
-                right: 12px;
-                left: 12px;
-                padding: 12px 16px;
-                font-size: 0.85rem;
-                border-radius: 12px;
+            .header-nav .nav-item-header {
+                font-size: 0.7rem;
+                padding: 4px 8px;
             }
-            .action-buttons .btn-assign {
-                font-size: 10px;
-                padding: 4px 10px;
+
+            .header-nav .nav-item-header i {
+                font-size: 0.7rem;
             }
-            .action-buttons .btn-edit,
-            .action-buttons .btn-delete {
-                font-size: 12px;
+
+            .company-table th,
+            .company-table td {
                 padding: 4px 6px;
+                font-size: 0.65rem;
             }
+
+            .company-name-cell {
+                font-size: 0.7rem;
+            }
+
+            .company-address {
+                font-size: 0.6rem;
+            }
+
+            .btn-assign,
+            .btn-edit,
+            .btn-delete {
+                font-size: 0.55rem;
+                padding: 2px 4px;
+            }
+
+            .btn-search,
+            .btn-add {
+                font-size: 0.75rem;
+                padding: 6px 12px;
+            }
+
+            .search-form input[type="search"] {
+                font-size: 0.75rem;
+                padding: 6px 10px;
+            }
+
+            .modal-header h2 {
+                font-size: 1rem;
+            }
+        }
+
+        /* ===== PASSWORD MODAL ===== */
+        #passwordModal .modal-container {
+            max-width: 480px;
+        }
+
+        #passwordModal .form-group {
+            margin-bottom: 14px;
+        }
+
+        #passwordModal .form-group label {
+            display: block;
+            font-weight: 600;
+            font-size: 0.82rem;
+            color: #1e293b;
+            margin-bottom: 4px;
+        }
+
+        #passwordModal .form-group label i {
+            margin-right: 6px;
+            color: #64748b;
+        }
+
+        #passwordModal .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #d1d9e6;
+            border-radius: 0;
+            font-size: 0.9rem;
+            background: #fafcff;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        #passwordModal .form-group input:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        #passwordModal .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 16px;
         }
     </style>
 </head>
 <body>
     <div class="app-shell">
-        <aside class="sidebar">
+        <!-- Sidebar Overlay for mobile -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- SIDEBAR: user profile panel -->
+        <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
                 <i class="fa-solid fa-users-gear"></i>
                 <h2>System<span>Coordinator Desk</span></h2>
             </div>
-            <nav class="nav-section">
-                <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item active" href="company.php"><i class="fa-solid fa-building"></i> Company </a>
-                <a class="nav-item" href="intern.php"><i class="fa-solid fa-business-time"></i> Internship </a>
-            </nav>
+
+            <div class="profile-panel">
+                <div class="avatar-editable" id="avatarEditable" title="Click to change your photo">
+                    <?php if (!empty($profilePictureUrl)): ?>
+                        <div class="avatar-img" id="avatarImgWrap">
+                            <img src="<?php echo htmlspecialchars($profilePictureUrl); ?>" alt="Profile photo" id="avatarImg" />
+                        </div>
+                    <?php else: ?>
+                        <div class="avatar-initials" id="avatarImgWrap">
+                            <?php
+                            $initials = '';
+                            $parts = explode(' ', trim($fullname));
+                            if (count($parts) >= 2) {
+                                $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
+                            } else {
+                                $initials = strtoupper(substr($fullname, 0, 2));
+                            }
+                            echo htmlspecialchars($initials);
+                            ?>
+                        </div>
+                    <?php endif; ?>
+                    <div class="avatar-edit-badge"><i class="fa-solid fa-camera"></i></div>
+                    <input type="file" id="avatarInput" accept="image/png, image/jpeg, image/webp, image/gif" />
+                </div>
+
+                <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
+                <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
+
+                <button class="btn-change-password" id="openPasswordModalBtn">
+                    <i class="fa-solid fa-key"></i> Change Password
+                </button>
+            </div>
+
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
             </div>
         </aside>
 
+        <!-- MAIN CONTENT -->
         <main class="main-content">
-            <!-- TOP HEADER -->
+            <!-- HEADER: full width, dark green, flush with top -->
             <div class="top-header">
                 <div class="header-left">
+                    <button class="mobile-menu-toggle" id="menuToggle" aria-label="Toggle menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
                     <h1>
                         <i class="fa-solid fa-building"></i>
                         Company Management
@@ -638,93 +1550,83 @@ $companies = $stmt->fetchAll();
                     </h1>
                 </div>
                 <div class="header-right">
+                    <!-- Header Navigation -->
+                    <nav class="header-nav">
+                        <a class="nav-item-header" href="dashboard.php"></i> Dashboard</a>
+                        <a class="nav-item-header active" href="company.php"></i> Companies</a>
+                        <a class="nav-item-header" href="intern.php"></i> Internship</a>
+                        <a class="nav-item-header" href="evaluation.php"></i> Evaluation</a>
+                        <a class="nav-item-header" href="dss.php"></i> Decision Support</a>
+                    </nav>
+
+                    <!-- Notification bell -->
                     <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
                         <i class="fa-regular fa-bell"></i>
                         <span class="notif-badge">3</span>
                     </button>
-                    <div class="user-profile">
-                        <div class="user-avatar">
-                            <?php
-                                $initials = '';
-                                $parts = explode(' ', trim($fullname));
-                                if (count($parts) >= 2) {
-                                    $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
-                                } else {
-                                    $initials = strtoupper(substr($fullname, 0, 2));
-                                }
-                                echo htmlspecialchars($initials);
-                            ?>
-                        </div>
-                        <div class="user-info">
-                            <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
-                            <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
-                        </div>
-                    </div>
                 </div>
             </div>
 
+            <!-- PAGE CARD -->
             <div class="page-card">
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid #e9edf2; flex-wrap: wrap; gap: 12px;">
+                <div class="page-card-header">
                     <div>
-                        <h3 style="font-weight: 600; color: #0f172a; font-size: 18px; margin: 0;">
-                            <i class="fa-solid fa-search"></i> Search Companies
-                        </h3>
-                        <p style="margin: 8px 0 0; color: #64748b;">Search by company name and assign a supervisor to a company.</p>
+                        <h3><i class="fa-solid fa-search"></i> Search Companies</h3>
+                        <p>Search by company name and assign a supervisor to a company.</p>
                     </div>
-                    <div style="display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <form action="company.php" method="get" style="display: inline-flex; gap: 8px; align-items: center;">
-                            <input type="search" name="search" placeholder="Search company name" value="<?php echo htmlspecialchars($search); ?>" style="padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 999px; min-width: 240px;" aria-label="Search companies" />
-                            <button type="submit" style="padding: 10px 18px; border-radius: 999px; background: #2563eb; color: #fff; border: none; cursor: pointer;">Search</button>
+                    <div class="page-card-actions">
+                        <form action="company.php" method="get" class="search-form">
+                            <input type="search" name="search" placeholder="Search company name..." value="<?php echo htmlspecialchars($search); ?>" aria-label="Search companies" />
+                            <button type="submit" class="btn-search"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
                         </form>
-                        <button onclick="openAddModal()" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 999px; font-weight: 600; font-size: 14px; background: #2563eb; color: #ffffff; border: none; cursor: pointer; transition: all 0.25s ease;">
-                            <i class="fa-solid fa-plus"></i> Add Company
+                        <button onclick="openAddModal()" class="btn-add">
+                            <i class="fa-solid fa-plus"></i> Add
                         </button>
                     </div>
                 </div>
 
-                <div style="overflow-x: auto; padding: 8px;">
+                <div class="table-wrapper">
                     <?php if (count($companies) > 0): ?>
-                        <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                        <table class="company-table">
                             <thead>
                                 <tr>
-                                    <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Company Name</th>
-                                    <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Industry</th>
-                                    <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Contact Person</th>
-                                    <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Email</th>
-                                    <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Phone</th>
-                                    <th style="text-align: left; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;">Supervisor</th>
-                                    <th style="text-align: center; padding: 14px 16px; color: #64748b; font-weight: 600; background: #fafcff; border-bottom: 2px solid #e9edf2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; width: 180px; min-width: 180px;">Actions</th>
+                                    <th>Company</th>
+                                    <th>Industry</th>
+                                    <th>Contact</th>
+                                    <th>Email</th>
+                                    <th>Phone</th>
+                                    <th>Supervisor</th>
+                                    <th style="text-align: center; width: 160px; min-width: 160px;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($companies as $company): ?>
-                                    <tr style="transition: background 0.15s ease;">
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; color: #1e293b;">
-                                            <strong><?php echo htmlspecialchars($company['company_name']); ?></strong>
-                                            <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">
-                                                <?php echo htmlspecialchars(substr($company['address'], 0, 50)) . (strlen($company['address']) > 50 ? '...' : ''); ?>
+                                    <tr>
+                                        <td>
+                                            <div class="company-name-cell"><?php echo htmlspecialchars($company['company_name']); ?></div>
+                                            <div class="company-address">
+                                                <i class="fa-solid fa-location-dot" style="color: #94a3b8; margin-right: 4px; font-size: 0.6rem;"></i>
+                                                <?php echo htmlspecialchars(substr($company['address'], 0, 40)) . (strlen($company['address']) > 40 ? '...' : ''); ?>
                                             </div>
                                         </td>
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9;">
-                                            <span style="background: #f1f5f9; padding: 4px 14px; border-radius: 40px; font-size: 12px; font-weight: 500; color: #334155;"><?php echo htmlspecialchars($company['industry']); ?></span>
-                                        </td>
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; color: #1e293b;"><?php echo htmlspecialchars($company['contact_person']); ?></td>
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; color: #1e293b;"><?php echo htmlspecialchars($company['contact_email'] ?? '-'); ?></td>
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; color: #1e293b;"><?php echo htmlspecialchars($company['contact_number'] ?? '-'); ?></td>
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; color: #1e293b;">
-                                            <span style="padding: 6px 12px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 13px; display: inline-flex; align-items: center;">
+                                        <td><span class="industry-tag"><?php echo htmlspecialchars($company['industry']); ?></span></td>
+                                        <td><?php echo htmlspecialchars($company['contact_person']); ?></td>
+                                        <td style="font-size: 0.75rem;"><?php echo htmlspecialchars($company['contact_email'] ?? '-'); ?></td>
+                                        <td style="font-size: 0.75rem;"><?php echo htmlspecialchars($company['contact_number'] ?? '-'); ?></td>
+                                        <td>
+                                            <span class="supervisor-badge <?php echo !empty($company['supervisor_id']) ? '' : 'unassigned'; ?>">
                                                 <?php echo !empty($company['supervisor_id']) && isset($supervisorNames[$company['supervisor_id']]) ? htmlspecialchars($supervisorNames[$company['supervisor_id']]) : 'Unassigned'; ?>
                                             </span>
                                         </td>
-                                        <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; text-align: center;" class="actions-column">
+                                        <td style="text-align: center;">
                                             <div class="action-buttons">
                                                 <button type="button" class="btn-assign" data-company-id="<?php echo htmlspecialchars($company['id'], ENT_QUOTES); ?>" data-company-name="<?php echo htmlspecialchars($company['company_name'], ENT_QUOTES); ?>" data-supervisor-id="<?php echo htmlspecialchars($company['supervisor_id'] ?? '', ENT_QUOTES); ?>">
-                                                    <i class="fa-solid fa-user-plus"></i> Assign
+                                                    <i class="fa-solid fa-user-plus"></i>
                                                 </button>
-                                                <button type="button" onclick="openEditModal(<?php echo $company['id']; ?>)" class="btn-edit" title="Edit Company">
+                                                <button type="button" onclick="openEditModal(<?php echo $company['id']; ?>)" class="btn-edit" title="Edit">
                                                     <i class="fa-solid fa-edit"></i>
                                                 </button>
-                                                <a href="?delete=<?php echo $company['id']; ?>" class="btn-delete" onclick="return confirm('Are you sure you want to delete this company?')" title="Delete Company">
+                                                <a href="?delete=<?php echo $company['id']; ?>" class="btn-delete" onclick="return confirm('Delete this company?')" title="Delete">
                                                     <i class="fa-solid fa-trash-alt"></i>
                                                 </a>
                                             </div>
@@ -734,9 +1636,9 @@ $companies = $stmt->fetchAll();
                             </tbody>
                         </table>
                     <?php else: ?>
-                        <div style="text-align: center; padding: 60px 20px; color: #94a3b8;">
-                            <i class="fa-solid fa-building-circle-exclamation" style="font-size: 48px; color: #cbd5e1; margin-bottom: 16px; display: block;"></i>
-                            <p style="font-size: 16px;">No companies added yet. Click "Add Company" to get started.</p>
+                        <div class="empty-state">
+                            <i class="fa-solid fa-building-circle-exclamation"></i>
+                            <p>No companies added yet. Click "Add" to get started.</p>
                         </div>
                     <?php endif; ?>
                 </div>
@@ -745,166 +1647,183 @@ $companies = $stmt->fetchAll();
     </div>
 
     <!-- ADD COMPANY MODAL -->
-    <div id="addModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); z-index: 1000; justify-content: center; align-items: center; padding: 20px;">
-        <div style="background: #ffffff; border-radius: 24px; max-width: 560px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.15); animation: modalSlideIn 0.3s ease;">
-            <!-- Modal Header - Fixed -->
-            <div style="padding: 24px 28px 16px 28px; border-bottom: 1px solid #f1f5f9; flex-shrink: 0;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <h2 style="font-size: 22px; font-weight: 600; color: #0f172a; margin: 0;">
-                        <i class="fa-solid fa-building" style="color: #2563eb; margin-right: 10px;"></i> Add New Company
-                    </h2>
-                    <button onclick="closeAddModal()" style="background: none; border: none; font-size: 28px; color: #94a3b8; cursor: pointer; transition: 0.15s; padding: 4px 8px; border-radius: 8px; line-height: 1;">&times;</button>
+    <div id="addModal" class="modal-overlay">
+        <div class="modal-container">
+            <div class="modal-header">
+                <div>
+                    <h2><i class="fa-solid fa-building"></i> Add Company</h2>
+                    <p>Enter the company details below.</p>
                 </div>
+                <button type="button" class="modal-close-btn" onclick="closeAddModal()">&times;</button>
             </div>
             
-            <!-- Modal Body - Scrollable -->
-            <div style="padding: 20px 28px; overflow-y: auto; flex: 1;">
-                <form method="POST" action="" id="addCompanyForm">
-                    <input type="hidden" name="action" value="add_company">
-                    
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Company Name <span style="color: #dc2626;">*</span></label>
-                        <input type="text" name="company_name" required placeholder="Enter company name" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                    </div>
-                    
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Address <span style="color: #dc2626;">*</span></label>
-                        <textarea name="address" required placeholder="Enter full address" rows="3" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; resize: vertical; min-height: 80px; box-sizing: border-box;"></textarea>
-                    </div>
-                    
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Industry <span style="color: #dc2626;">*</span></label>
-                        <input type="text" name="industry" required placeholder="e.g., Technology, Healthcare, Finance" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                    </div>
-                    
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Contact Person <span style="color: #dc2626;">*</span></label>
-                        <input type="text" name="contact_person" required placeholder="Full name" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                    </div>
-                    
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px;">
-                        <div>
-                            <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Contact Email</label>
-                            <input type="email" name="contact_email" placeholder="email@company.com" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                        </div>
-                        <div>
-                            <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Contact Number</label>
-                            <input type="text" name="contact_number" placeholder="+63 912 345 6789" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                        </div>
-                    </div>
-                </form>
-            </div>
-            
-            <!-- Modal Footer - Fixed -->
-            <div style="padding: 16px 28px 24px 28px; border-top: 1px solid #f1f5f9; flex-shrink: 0;">
-                <div style="display: flex; gap: 12px; justify-content: flex-end;">
-                    <button type="button" onclick="closeAddModal()" style="padding: 10px 24px; border-radius: 40px; font-weight: 600; font-size: 14px; background: #f1f5f9; color: #475569; border: none; cursor: pointer; transition: all 0.2s ease;">Cancel</button>
-                    <button type="submit" form="addCompanyForm" style="padding: 10px 24px; border-radius: 40px; font-weight: 600; font-size: 14px; background: #2563eb; color: #ffffff; border: none; cursor: pointer; transition: all 0.25s ease;"><i class="fa-solid fa-save"></i> Save Company</button>
+            <form method="POST" action="" id="addCompanyForm" class="modal-body">
+                <input type="hidden" name="action" value="add_company">
+                
+                <div class="form-group">
+                    <label>Company Name <span class="required">*</span></label>
+                    <input type="text" name="company_name" required placeholder="Enter company name" />
                 </div>
+                
+                <div class="form-group">
+                    <label>Address <span class="required">*</span></label>
+                    <textarea name="address" required placeholder="Enter full address" rows="2"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Industry <span class="required">*</span></label>
+                    <input type="text" name="industry" required placeholder="e.g., Technology, Healthcare" />
+                </div>
+                
+                <div class="form-group">
+                    <label>Contact Person <span class="required">*</span></label>
+                    <input type="text" name="contact_person" required placeholder="Full name" />
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Contact Email</label>
+                        <input type="email" name="contact_email" placeholder="email@company.com" />
+                    </div>
+                    <div class="form-group">
+                        <label>Contact Number</label>
+                        <input type="text" name="contact_number" placeholder="+63 912 345 6789" />
+                    </div>
+                </div>
+            </form>
+            
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" onclick="closeAddModal()">Cancel</button>
+                <button type="submit" form="addCompanyForm" class="btn-primary"><i class="fa-solid fa-save"></i> Save</button>
             </div>
         </div>
     </div>
 
     <!-- EDIT COMPANY MODAL -->
-    <div id="editModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); z-index: 1000; justify-content: center; align-items: center; padding: 20px;">
-        <div style="background: #ffffff; border-radius: 24px; max-width: 560px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.15); animation: modalSlideIn 0.3s ease;">
-            <!-- Modal Header - Fixed -->
-            <div style="padding: 24px 28px 16px 28px; border-bottom: 1px solid #f1f5f9; flex-shrink: 0;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <h2 style="font-size: 22px; font-weight: 600; color: #0f172a; margin: 0;">
-                        <i class="fa-solid fa-edit" style="color: #2563eb; margin-right: 10px;"></i> Edit Company
-                    </h2>
-                    <button onclick="closeEditModal()" style="background: none; border: none; font-size: 28px; color: #94a3b8; cursor: pointer; transition: 0.15s; padding: 4px 8px; border-radius: 8px; line-height: 1;">&times;</button>
+    <div id="editModal" class="modal-overlay">
+        <div class="modal-container">
+            <div class="modal-header">
+                <div>
+                    <h2><i class="fa-solid fa-edit"></i> Edit Company</h2>
+                    <p>Update the company details below.</p>
                 </div>
+                <button type="button" class="modal-close-btn" onclick="closeEditModal()">&times;</button>
             </div>
             
-            <!-- Modal Body - Scrollable -->
-            <div style="padding: 20px 28px; overflow-y: auto; flex: 1;">
-                <form method="POST" action="" id="editCompanyForm">
-                    <input type="hidden" name="action" value="edit_company">
-                    <input type="hidden" name="company_id" id="edit_company_id" value="">
-                    
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Company Name <span style="color: #dc2626;">*</span></label>
-                        <input type="text" name="company_name" id="edit_company_name" required placeholder="Enter company name" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                    </div>
-                    
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Address <span style="color: #dc2626;">*</span></label>
-                        <textarea name="address" id="edit_address" required placeholder="Enter full address" rows="3" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; resize: vertical; min-height: 80px; box-sizing: border-box;"></textarea>
-                    </div>
-                    
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Industry <span style="color: #dc2626;">*</span></label>
-                        <input type="text" name="industry" id="edit_industry" required placeholder="e.g., Technology, Healthcare, Finance" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                    </div>
-                    
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Contact Person <span style="color: #dc2626;">*</span></label>
-                        <input type="text" name="contact_person" id="edit_contact_person" required placeholder="Full name" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                    </div>
-                    
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px;">
-                        <div>
-                            <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Contact Email</label>
-                            <input type="email" name="contact_email" id="edit_contact_email" placeholder="email@company.com" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                        </div>
-                        <div>
-                            <label style="display: block; font-weight: 500; color: #334155; font-size: 14px; margin-bottom: 6px;">Contact Number</label>
-                            <input type="text" name="contact_number" id="edit_contact_number" placeholder="+63 912 345 6789" style="width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 12px; font-size: 14px; font-family: inherit; transition: all 0.2s ease; background: #f8fafc; box-sizing: border-box;" />
-                        </div>
-                    </div>
-                </form>
-            </div>
-            
-            <!-- Modal Footer - Fixed -->
-            <div style="padding: 16px 28px 24px 28px; border-top: 1px solid #f1f5f9; flex-shrink: 0;">
-                <div style="display: flex; gap: 12px; justify-content: flex-end;">
-                    <button type="button" onclick="closeEditModal()" style="padding: 10px 24px; border-radius: 40px; font-weight: 600; font-size: 14px; background: #f1f5f9; color: #475569; border: none; cursor: pointer; transition: all 0.2s ease;">Cancel</button>
-                    <button type="submit" form="editCompanyForm" style="padding: 10px 24px; border-radius: 40px; font-weight: 600; font-size: 14px; background: #2563eb; color: #ffffff; border: none; cursor: pointer; transition: all 0.25s ease;"><i class="fa-solid fa-save"></i> Update Company</button>
+            <form method="POST" action="" id="editCompanyForm" class="modal-body">
+                <input type="hidden" name="action" value="edit_company">
+                <input type="hidden" name="company_id" id="edit_company_id" value="">
+                
+                <div class="form-group">
+                    <label>Company Name <span class="required">*</span></label>
+                    <input type="text" name="company_name" id="edit_company_name" required placeholder="Enter company name" />
                 </div>
+                
+                <div class="form-group">
+                    <label>Address <span class="required">*</span></label>
+                    <textarea name="address" id="edit_address" required placeholder="Enter full address" rows="2"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Industry <span class="required">*</span></label>
+                    <input type="text" name="industry" id="edit_industry" required placeholder="e.g., Technology, Healthcare" />
+                </div>
+                
+                <div class="form-group">
+                    <label>Contact Person <span class="required">*</span></label>
+                    <input type="text" name="contact_person" id="edit_contact_person" required placeholder="Full name" />
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Contact Email</label>
+                        <input type="email" name="contact_email" id="edit_contact_email" placeholder="email@company.com" />
+                    </div>
+                    <div class="form-group">
+                        <label>Contact Number</label>
+                        <input type="text" name="contact_number" id="edit_contact_number" placeholder="+63 912 345 6789" />
+                    </div>
+                </div>
+            </form>
+            
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" onclick="closeEditModal()">Cancel</button>
+                <button type="submit" form="editCompanyForm" class="btn-primary"><i class="fa-solid fa-save"></i> Update</button>
             </div>
         </div>
     </div>
 
-    <div id="assignModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(2px); z-index: 1100; justify-content: center; align-items: center; padding: 20px;">
-        <div style="background: #ffffff; border-radius: 24px; max-width: 640px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18); overflow: hidden;">
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 22px 24px; border-bottom: 1px solid #e2e8f0;">
+    <!-- ASSIGN SUPERVISOR MODAL -->
+    <div id="assignModal" class="modal-overlay">
+        <div class="modal-container assign-modal">
+            <div class="modal-header">
                 <div>
-                    <h2 style="font-size: 22px; font-weight: 700; color: #0f172a; margin: 0;">Assign Supervisor</h2>
-                    <p style="margin: 6px 0 0; color: #64748b; font-size: 14px;">Search supervisors and select one to assign.</p>
-                    <div id="assignModalCompanyName" style="margin-top: 8px; color: #334155; font-size: 13px;"></div>
+                    <h2><i class="fa-solid fa-user-plus"></i> Assign Supervisor</h2>
+                    <p>Search and select a supervisor for <span id="assignModalCompanyName" style="font-weight: 600; color: #0f172a;"></span></p>
                 </div>
-                <button type="button" onclick="closeAssignModal()" style="background: none; border: none; font-size: 28px; color: #94a3b8; cursor: pointer;">&times;</button>
+                <button type="button" class="modal-close-btn" onclick="closeAssignModal()">&times;</button>
             </div>
-            <div style="padding: 18px 24px 0;">
-                <input id="assignSupervisorSearch" type="search" placeholder="Search supervisors" style="width: 100%; padding: 12px 16px; border: 1px solid #d1d5db; border-radius: 14px; font-size: 14px;" aria-label="Search supervisors" />
+            
+            <form id="assignSupervisorForm" method="post" action="company.php" class="modal-body assign-body">
+                <input type="hidden" name="action" value="assign_supervisor" />
+                <input type="hidden" name="company_id" id="assign_company_id" value="" />
+                <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>" />
+                
+                <div class="search-box">
+                    <input id="assignSupervisorSearch" type="search" placeholder="Search supervisors by name..." aria-label="Search supervisors" />
+                </div>
+                
+                <div class="supervisor-grid" id="supervisorList">
+                    <?php foreach ($supervisors as $supervisor): ?>
+                        <label class="supervisor-item" data-name="<?php echo htmlspecialchars(strtolower(getFullName($supervisor))); ?>" style="display: flex;">
+                            <input type="checkbox" name="supervisor_id" value="<?php echo $supervisor['id']; ?>" class="supervisor-checkbox" />
+                            <div>
+                                <div class="supervisor-name"><?php echo htmlspecialchars(getFullName($supervisor)); ?></div>
+                                <div class="supervisor-role"><i class="fa-regular fa-user"></i> Supervisor</div>
+                            </div>
+                        </label>
+                    <?php endforeach; ?>
+                    <div id="noSupervisorsMessage" style="display: none; text-align: center; padding: 20px 0; color: #64748b;">No unassigned supervisors available.</div>
+                    <?php if (count($supervisors) === 0): ?>
+                        <div style="text-align: center; padding: 20px 0; color: #64748b;">No active supervisors available.</div>
+                    <?php endif; ?>
+                </div>
+            </form>
+            
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" onclick="closeAssignModal()">Cancel</button>
+                <button type="button" class="btn-primary" onclick="submitAssignSupervisor()"><i class="fa-solid fa-save"></i> Assign</button>
             </div>
-            <div style="overflow-y: auto; flex: 1; padding: 16px 24px;">
-                <form id="assignSupervisorForm" method="post" action="company.php">
-                    <input type="hidden" name="action" value="assign_supervisor" />
-                    <input type="hidden" name="company_id" id="assign_company_id" value="" />
-                    <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>" />
-                    <div id="supervisorList" style="display: grid; gap: 10px;">
-                        <?php foreach ($supervisors as $supervisor): ?>
-                            <label class="supervisor-item" data-name="<?php echo htmlspecialchars(strtolower(getFullName($supervisor))); ?>" style="display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid #e2e8f0; border-radius: 18px; cursor: pointer; transition: background 0.2s ease;">
-                                <input type="checkbox" name="supervisor_id" value="<?php echo $supervisor['id']; ?>" class="supervisor-checkbox" style="width: 18px; height: 18px; accent: #2563eb;" />
-                                <div>
-                                    <div style="font-weight: 600; color: #0f172a;"><?php echo htmlspecialchars(getFullName($supervisor)); ?></div>
-                                    <div style="color: #64748b; font-size: 13px;">Supervisor</div>
-                                </div>
-                            </label>
-                        <?php endforeach; ?>
-                        <div id="noSupervisorsMessage" style="display: none; text-align: center; padding: 30px 0; color: #64748b;">No unassigned supervisors available.</div>
-                        <?php if (count($supervisors) === 0): ?>
-                            <div style="text-align: center; padding: 30px 0; color: #64748b;">No active supervisors available.</div>
-                        <?php endif; ?>
-                    </div>
-                </form>
+        </div>
+    </div>
+
+    <!-- CHANGE PASSWORD MODAL -->
+    <div class="modal-overlay" id="passwordModal">
+        <div class="modal-container">
+            <div class="modal-header">
+                <div>
+                    <h2><i class="fa-solid fa-key"></i> Change Password</h2>
+                    <p>Enter your current password and choose a new one.</p>
+                </div>
+                <button type="button" class="modal-close-btn" id="closePasswordBtn">&times;</button>
             </div>
-            <div style="padding: 16px 24px 24px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
-                <button type="button" onclick="closeAssignModal()" style="padding: 10px 22px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; color: #475569; cursor: pointer;">Cancel</button>
-                <button type="button" onclick="submitAssignSupervisor()" style="padding: 10px 22px; border-radius: 999px; background: #2563eb; color: #fff; border: none; cursor: pointer;">Save</button>
+            <form id="passwordForm" class="modal-body">
+                <div class="form-group">
+                    <label for="currentPassword"><i class="fa-solid fa-lock"></i> Current Password</label>
+                    <input type="password" id="currentPassword" autocomplete="current-password" required />
+                </div>
+                <div class="form-group">
+                    <label for="newPassword"><i class="fa-solid fa-lock"></i> New Password</label>
+                    <input type="password" id="newPassword" autocomplete="new-password" minlength="8" required />
+                </div>
+                <div class="form-group">
+                    <label for="confirmPassword"><i class="fa-solid fa-lock"></i> Confirm New Password</label>
+                    <input type="password" id="confirmPassword" autocomplete="new-password" minlength="8" required />
+                </div>
+            </form>
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" id="closePasswordBtn2">Cancel</button>
+                <button type="submit" form="passwordForm" class="btn-primary"><i class="fa-solid fa-check"></i> Update</button>
             </div>
         </div>
     </div>
@@ -920,6 +1839,14 @@ $companies = $stmt->fetchAll();
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
             const toastMessage = document.getElementById('toastMessage');
+            
+            // Set icon based on type
+            const icon = toast.querySelector('i');
+            if (type === 'success') {
+                icon.className = 'fa-regular fa-circle-check';
+            } else if (type === 'error') {
+                icon.className = 'fa-regular fa-circle-xmark';
+            }
             
             toast.className = 'toast ' + type + ' show';
             toastMessage.textContent = message;
@@ -950,7 +1877,173 @@ $companies = $stmt->fetchAll();
             this.classList.remove('show');
         });
 
-        // Add Modal Functions
+        // ===== MOBILE MENU TOGGLE =====
+        const sidebar = document.getElementById('sidebar');
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+        function toggleSidebar() {
+            sidebar.classList.toggle('open');
+            sidebarOverlay.classList.toggle('show');
+            document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
+        }
+
+        function closeSidebar() {
+            sidebar.classList.remove('open');
+            sidebarOverlay.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+
+        if (menuToggle) {
+            menuToggle.addEventListener('click', toggleSidebar);
+        }
+
+        if (sidebarOverlay) {
+            sidebarOverlay.addEventListener('click', closeSidebar);
+        }
+
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+
+        // ===== PASSWORD MODAL =====
+        const passwordModal = document.getElementById('passwordModal');
+        const openPasswordBtn = document.getElementById('openPasswordModalBtn');
+        const closePasswordBtn = document.getElementById('closePasswordBtn');
+        const closePasswordBtn2 = document.getElementById('closePasswordBtn2');
+        const passwordForm = document.getElementById('passwordForm');
+
+        if (openPasswordBtn) {
+            openPasswordBtn.addEventListener('click', function() {
+                if (passwordModal) {
+                    passwordModal.style.display = 'flex';
+                    document.body.style.overflow = 'hidden';
+                    if (passwordForm) passwordForm.reset();
+                }
+            });
+        }
+
+        function closePasswordModal() {
+            if (passwordModal) {
+                passwordModal.style.display = 'none';
+                document.body.style.overflow = '';
+            }
+        }
+
+        if (closePasswordBtn) closePasswordBtn.addEventListener('click', closePasswordModal);
+        if (closePasswordBtn2) closePasswordBtn2.addEventListener('click', closePasswordModal);
+        if (passwordModal) {
+            passwordModal.addEventListener('click', function(e) {
+                if (e.target === passwordModal) closePasswordModal();
+            });
+        }
+
+        if (passwordForm) {
+            passwordForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                var currentPassword = document.getElementById('currentPassword').value;
+                var newPassword = document.getElementById('newPassword').value;
+                var confirmPassword = document.getElementById('confirmPassword').value;
+
+                if (newPassword !== confirmPassword) {
+                    showToast('New password and confirmation do not match.', 'error');
+                    return;
+                }
+                if (newPassword.length < 8) {
+                    showToast('New password must be at least 8 characters.', 'error');
+                    return;
+                }
+
+                var submitBtn = passwordForm.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Updating...';
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'change_password');
+                formData.append('current_password', currentPassword);
+                formData.append('new_password', newPassword);
+                formData.append('confirm_password', confirmPassword);
+
+                fetch(window.location.href, { method: 'POST', body: formData })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showToast(data.message || 'Password updated successfully.', 'success');
+                            closePasswordModal();
+                        } else {
+                            showToast(data.message || 'Failed to update password.', 'error');
+                        }
+                    })
+                    .catch(function() {
+                        showToast('An error occurred. Please try again.', 'error');
+                    })
+                    .finally(function() {
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = '<i class="fa-solid fa-check"></i> Update Password';
+                        }
+                    });
+            });
+        }
+
+        // ===== AVATAR UPLOAD =====
+        var avatarEditable = document.getElementById('avatarEditable');
+        var avatarInput = document.getElementById('avatarInput');
+        var avatarImgWrap = document.getElementById('avatarImgWrap');
+
+        if (avatarEditable && avatarInput) {
+            avatarEditable.addEventListener('click', function() {
+                avatarInput.click();
+            });
+
+            avatarInput.addEventListener('change', function() {
+                var file = avatarInput.files[0];
+                if (!file) return;
+
+                if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+                    showToast('Only JPG, PNG, WEBP or GIF images are allowed.', 'error');
+                    return;
+                }
+                if (file.size > 2 * 1024 * 1024) {
+                    showToast('Image must be smaller than 2MB.', 'error');
+                    return;
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'update_avatar');
+                formData.append('avatar', file);
+
+                fetch(window.location.href, { method: 'POST', body: formData })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showToast('Profile picture updated.', 'success');
+                            if (avatarImgWrap && data.path) {
+                                avatarImgWrap.className = 'avatar-img';
+                                avatarImgWrap.innerHTML = '<img src="' + data.path + '?t=' + Date.now() + '" alt="Profile photo" id="avatarImg" />';
+                            }
+                        } else {
+                            showToast(data.message || 'Failed to update profile picture.', 'error');
+                        }
+                    })
+                    .catch(function() {
+                        showToast('An error occurred while uploading. Please try again.', 'error');
+                    });
+            });
+        }
+
+        // ===== MODAL FUNCTIONS =====
         function openAddModal() {
             document.getElementById('addModal').style.display = 'flex';
             document.body.style.overflow = 'hidden';
@@ -961,7 +2054,6 @@ $companies = $stmt->fetchAll();
             document.body.style.overflow = '';
         }
 
-        // Edit Modal Functions
         function openEditModal(companyId) {
             fetch('?get_company=' + companyId)
                 .then(response => response.json())
@@ -1095,6 +2187,10 @@ $companies = $stmt->fetchAll();
                 closeAddModal();
                 closeEditModal();
                 closeAssignModal();
+                closePasswordModal();
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
             }
         });
     </script>

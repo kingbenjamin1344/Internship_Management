@@ -3,9 +3,15 @@
 // Full working code with database integration and modal functionality
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once '../includes/notifications.php';
 
 // Include database configuration from config folder
 require_once __DIR__ . '/../config/database.php';
+
+
+
+
+
 
 // Check if user is student
 checkAccess('student');
@@ -14,6 +20,202 @@ $username = $_SESSION['username'] ?? 'Student';
 $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Student';
 $role = getUserRole();
 $student_id = $_SESSION['user_id'] ?? 0;
+
+// Check if student has committed to a job - REQUIRED FOR DPR ACCESS
+$committedJob = getStudentCommittedJob($pdo, $student_id);
+$hasCommittedJob = (bool)$committedJob;
+if (!$committedJob) {
+    $_SESSION['error'] = 'You must be committed to an internship position to access Daily Progress Reports. Please commit to a job first from your applications.';
+    header('Location: applications.php');
+    exit;
+}
+
+// ===== PROFILE PICTURE / PASSWORD SETTINGS =====
+// NOTE: assumes a `users` table with columns `id`, `password` (hashed) and
+// `profile_picture` (relative path, nullable). Adjust column/table names to
+// match your actual schema if they differ.
+$avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
+$avatarPublicPath = '../assets/uploads/avatars/';
+
+function getUserProfilePicture($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT profile_picture FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        return $stmt->fetchColumn() ?: null;
+    } catch (PDOException $e) {
+        return null;
+    }
+}
+
+// ===== DPR MONITORING FUNCTIONS =====
+
+/**
+ * Check for retroactive submission flags (multiple DPRs in short timeframe)
+ */
+function checkRetroactiveSubmissions($pdo, $student_id, $new_entry_date) {
+    $flags = [];
+    
+    // Check submissions in the last 7 days
+    $weekAgo = date('Y-m-d', strtotime('-7 days'));
+    $stmt = $pdo->prepare("
+        SELECT date, created_at 
+        FROM dpr_entries 
+        WHERE student_id = ? 
+        AND date >= ? 
+        AND date <= ?
+        ORDER BY created_at DESC
+    ");
+    $stmt->execute([$student_id, $weekAgo, $new_entry_date]);
+    $recentEntries = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    if (count($recentEntries) > 0) {
+        // Check for multiple entries on same date
+        $dateCounts = [];
+        $submissionTimes = [];
+        
+        foreach ($recentEntries as $entry) {
+            $date = $entry['date'];
+            $created_at = strtotime($entry['created_at']);
+            
+            if (!isset($dateCounts[$date])) {
+                $dateCounts[$date] = 0;
+            }
+            $dateCounts[$date]++;
+            
+            if (!isset($submissionTimes[$date])) {
+                $submissionTimes[$date] = [];
+            }
+            $submissionTimes[$date][] = date('H:i', $created_at);
+        }
+        
+        // Check for multiple entries on same day (retroactive flag)
+        foreach ($dateCounts as $date => $count) {
+            if ($count >= 2) {
+                $flags[] = [
+                    'type' => 'multiple_entries',
+                    'severity' => 'warning',
+                    'date' => $date,
+                    'message' => "Multiple DPR entries ({$count}) submitted for {$date}",
+                    'times' => $submissionTimes[$date]
+                ];
+            }
+        }
+        
+        // Check for rapid submissions (within 5 minutes of each other)
+        if (count($recentEntries) >= 2) {
+            $times = array_column($recentEntries, 'created_at');
+            $timestamps = array_map('strtotime', $times);
+            sort($timestamps);
+            
+            for ($i = 0; $i < count($timestamps) - 1; $i++) {
+                $diff = $timestamps[$i + 1] - $timestamps[$i];
+                if ($diff <= 300) { // 5 minutes
+                    $flags[] = [
+                        'type' => 'rapid_submission',
+                        'severity' => 'warning',
+                        'message' => "Rapid DPR submissions detected (" . round($diff/60, 1) . " minutes apart)",
+                        'date1' => date('Y-m-d H:i', $timestamps[$i]),
+                        'date2' => date('Y-m-d H:i', $timestamps[$i + 1])
+                    ];
+                    break;
+                }
+            }
+        }
+    }
+    
+    return $flags;
+}
+
+/**
+ * Check for missed DPR submissions for working days
+ */
+function checkMissedDPRSubmissions($pdo, $student_id, $committed_date) {
+    $missedDates = [];
+    
+    // Get the current date and the committed date
+    $today = date('Y-m-d');
+    $committed = date('Y-m-d', strtotime($committed_date));
+    
+    // Get all submitted dates
+    $stmt = $pdo->prepare("
+        SELECT DISTINCT date 
+        FROM dpr_entries 
+        WHERE student_id = ? 
+        AND date >= ?
+        AND date <= ?
+        ORDER BY date ASC
+    ");
+    $stmt->execute([$student_id, $committed, $today]);
+    $submittedDates = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    // Check each day from committed date to today
+    $current = strtotime($committed);
+    $end = strtotime($today);
+    
+    while ($current <= $end) {
+        $currentDate = date('Y-m-d', $current);
+        $dayOfWeek = date('N', $current); // 1=Monday, 7=Sunday
+        
+        // Skip weekends (Saturday and Sunday)
+        if ($dayOfWeek < 6) {
+            // Check if this date has a DPR entry
+            if (!in_array($currentDate, $submittedDates)) {
+                // Check if this date is more than 1 day old (allow same-day submissions)
+                $daysAgo = (strtotime($today) - $current) / (60 * 60 * 24);
+                if ($daysAgo > 1) { // More than 1 day old = truly missed
+                    $missedDates[] = [
+                        'date' => $currentDate,
+                        'day' => date('l', $current),
+                        'days_ago' => round($daysAgo)
+                    ];
+                }
+            }
+        }
+        
+        $current = strtotime('+1 day', $current);
+    }
+    
+    return $missedDates;
+}
+
+/**
+ * Get submission statistics
+ */
+function getDPRStatistics($pdo, $student_id) {
+    // Total entries
+    $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM dpr_entries WHERE student_id = ?");
+    $stmt->execute([$student_id]);
+    $total = $stmt->fetchColumn();
+    
+    // Entries by status
+    $stmt = $pdo->prepare("SELECT status, COUNT(*) as count FROM dpr_entries WHERE student_id = ? GROUP BY status");
+    $stmt->execute([$student_id]);
+    $byStatus = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+    
+    // Last submission
+    $stmt = $pdo->prepare("SELECT MAX(created_at) as last_submission FROM dpr_entries WHERE student_id = ?");
+    $stmt->execute([$student_id]);
+    $lastSubmission = $stmt->fetchColumn();
+    
+    // Average submission time (based on time_in if available)
+    $stmt = $pdo->prepare("
+        SELECT AVG(TIME_TO_SEC(TIMEDIFF(created_at, CONCAT(date, ' ', time_in)))) as avg_time 
+        FROM dpr_entries 
+        WHERE student_id = ? AND time_in IS NOT NULL
+    ");
+    $stmt->execute([$student_id]);
+    $avgTime = $stmt->fetchColumn();
+    
+    return [
+        'total_entries' => $total,
+        'by_status' => $byStatus,
+        'last_submission' => $lastSubmission,
+        'avg_submission_time' => $avgTime,
+        'has_entries' => $total > 0
+    ];
+}
+
+// ===== END MONITORING FUNCTIONS =====
 
 // Handle AJAX requests for adding DPR
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -34,14 +236,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
         
         try {
+            // Begin transaction
+            $pdo->beginTransaction();
+            
+            // Check for retroactive submissions BEFORE inserting
+            $retroFlags = checkRetroactiveSubmissions($pdo, $student_id, $date);
+            
+            // Check if this is a missed submission
+            $today = date('Y-m-d');
+            $isMissed = ($date < $today);
+            $daysLate = (strtotime($today) - strtotime($date)) / (60 * 60 * 24);
+            
+            // Insert the entry
             $stmt = $pdo->prepare("
-                INSERT INTO dpr_entries (student_id, date, time_in, time_out, tasks, feedback, status) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO dpr_entries (student_id, date, time_in, time_out, tasks, feedback, status, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt->execute([$student_id, $date, $time_in, $time_out, $tasks, $feedback, $status]);
+            $entryId = $pdo->lastInsertId();
             
-            echo json_encode(['success' => true, 'message' => 'DPR added successfully']);
+            // Log the submission for monitoring
+            $submissionLog = [
+                'entry_id' => $entryId,
+                'student_id' => $student_id,
+                'date' => $date,
+                'submitted_at' => date('Y-m-d H:i:s'),
+                'days_late' => $isMissed ? round($daysLate, 1) : 0,
+                'retroactive_flags' => $retroFlags
+            ];
+            
+            // You could insert this into a monitoring log table if needed
+            // For now, we'll store it in session for display
+            $_SESSION['dpr_submission_info'] = $submissionLog;
+
+            $supervisorId = findSupervisorForStudent($pdo, $student_id);
+            if ($supervisorId) {
+                createSystemNotification(
+                    $pdo,
+                    $supervisorId,
+                    $student_id,
+                    'dpr',
+                    'New DPR Submission',
+                    'A student submitted a DPR for review.',
+                    'dashboard.php'
+                );
+            }
+            
+            $pdo->commit();
+            
+            // Prepare response with monitoring data
+            $response = [
+                'success' => true, 
+                'message' => 'DPR added successfully',
+                'monitoring' => [
+                    'is_missed' => $isMissed,
+                    'days_late' => $isMissed ? round($daysLate, 1) : 0,
+                    'retroactive_flags' => $retroFlags,
+                    'submission_time' => date('Y-m-d H:i:s')
+                ]
+            ];
+            
+            echo json_encode($response);
         } catch (PDOException $e) {
+            $pdo->rollBack();
             echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
         }
         exit;
@@ -58,6 +315,92 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true]);
         } catch (PDOException $e) {
             echo json_encode(['success' => false]);
+        }
+        exit;
+    }
+
+    // Change password (from the sidebar profile modal)
+    if ($_POST['action'] === 'change_password') {
+        $currentPassword = $_POST['current_password'] ?? '';
+        $newPassword = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
+
+        if (empty($currentPassword) || empty($newPassword) || empty($confirmPassword)) {
+            echo json_encode(['success' => false, 'message' => 'All fields are required.']);
+            exit;
+        }
+        if ($newPassword !== $confirmPassword) {
+            echo json_encode(['success' => false, 'message' => 'New password and confirmation do not match.']);
+            exit;
+        }
+        if (strlen($newPassword) < 8) {
+            echo json_encode(['success' => false, 'message' => 'New password must be at least 8 characters.']);
+            exit;
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT password FROM users WHERE id = ?");
+            $stmt->execute([$student_id]);
+            $hash = $stmt->fetchColumn();
+
+            if (!$hash || !password_verify($currentPassword, $hash)) {
+                echo json_encode(['success' => false, 'message' => 'Current password is incorrect.']);
+                exit;
+            }
+
+            $newHash = password_hash($newPassword, PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
+            $stmt->execute([$newHash, $student_id]);
+
+            echo json_encode(['success' => true, 'message' => 'Password updated successfully.']);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // Update profile picture (from the sidebar avatar)
+    if ($_POST['action'] === 'update_avatar' && isset($_FILES['avatar'])) {
+        $file = $_FILES['avatar'];
+        $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+        $maxSize = 2 * 1024 * 1024; // 2MB
+
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            echo json_encode(['success' => false, 'message' => 'Upload failed. Please try again.']);
+            exit;
+        }
+        if (!in_array($file['type'], $allowedTypes)) {
+            echo json_encode(['success' => false, 'message' => 'Only JPG, PNG, WEBP or GIF images are allowed.']);
+            exit;
+        }
+        if ($file['size'] > $maxSize) {
+            echo json_encode(['success' => false, 'message' => 'Image must be smaller than 2MB.']);
+            exit;
+        }
+
+        if (!is_dir($avatarUploadDir)) {
+            @mkdir($avatarUploadDir, 0755, true);
+        }
+
+        $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $newFileName = 'user_' . $student_id . '_' . time() . '.' . strtolower($ext);
+        $destination = $avatarUploadDir . $newFileName;
+
+        if (move_uploaded_file($file['tmp_name'], $destination)) {
+            try {
+                $stmt = $pdo->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
+                $stmt->execute([$newFileName, $student_id]);
+
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'Profile picture updated.',
+                    'path' => $avatarPublicPath . $newFileName
+                ]);
+            } catch (PDOException $e) {
+                echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+            }
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Could not save the uploaded file.']);
         }
         exit;
     }
@@ -99,6 +442,11 @@ try {
     }
 }
 
+// Get monitoring data (keep functions but don't display cards)
+$dprStats = getDPRStatistics($pdo, $student_id);
+$missedSubmissions = checkMissedDPRSubmissions($pdo, $student_id, $committedJob['committed_at']);
+$retroactiveFlags = checkRetroactiveSubmissions($pdo, $student_id, date('Y-m-d'));
+
 // Get distinct dates from the database for the filter dropdown
 $availableDates = [];
 try {
@@ -111,11 +459,21 @@ try {
     $availableDates = [];
 }
 
+// Current profile picture (used to render the sidebar avatar)
+$profilePicture = getUserProfilePicture($pdo, $student_id);
+$profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
+
 // Format dates for display (d M Y)
 function formatDateDisplay($date) {
     if (empty($date)) return '';
     $timestamp = strtotime($date);
     return date('d M Y', $timestamp);
+}
+
+// Format time for display
+function formatTimeDisplay($time) {
+    if (empty($time)) return '—';
+    return date('h:i A', strtotime($time));
 }
 ?>
 <!DOCTYPE html>
@@ -127,11 +485,14 @@ function formatDateDisplay($date) {
     <link rel="stylesheet" href="../assets/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <!-- Include jsPDF for PDF export -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
     <style>
-        /* ----- Reset / base overrides ----- */
+        /* ============================================================
+           Dark Green (#003300) & Golden Yellow (#FFCC33) theme
+           Sharp card edges, no rounded corners.
+           Header spans full width, flush with top.
+           ============================================================ */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -139,8 +500,8 @@ function formatDateDisplay($date) {
         }
 
         body {
-            background: #f1f5f9;
-            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f0f2f5;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0f172a;
         }
 
@@ -149,96 +510,169 @@ function formatDateDisplay($date) {
             min-height: 100vh;
         }
 
-        /* ----- SIDEBAR ----- */
+        /* ---- Dark Green Sidebar (now a profile panel) ---- */
         .sidebar {
             width: 250px;
-            background: #0f172a;
+            background: #003300;
             color: #e2e8f0;
             display: flex;
             flex-direction: column;
             position: sticky;
             top: 0;
             height: 100vh;
-            padding: 24px 18px 20px;
+            padding: 28px 18px 20px;
             flex-shrink: 0;
+            border-right: 1px solid #1a4a1a;
+            align-items: center;
+            text-align: center;
         }
 
         .sidebar-brand {
             display: flex;
             align-items: center;
             gap: 10px;
-            margin-bottom: 32px;
+            margin-bottom: 28px;
+            padding: 0 6px;
         }
 
         .sidebar-brand i {
             font-size: 1.6rem;
-            color: #38bdf8;
+            color: #FFCC33;
         }
 
         .sidebar-brand h2 {
             font-size: 1.2rem;
             font-weight: 700;
             letter-spacing: -0.3px;
+            color: #FFCC33;
         }
 
         .sidebar-brand h2 span {
             display: block;
             font-weight: 400;
             font-size: 0.65rem;
-            color: #94a3b8;
+            color: #FFCC33;
+            opacity: 0.8;
             letter-spacing: 0.4px;
             text-transform: uppercase;
         }
 
-        .nav-section {
+        /* ---- Profile panel (sidebar) ---- */
+        .profile-panel {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-            flex: 1;
+            align-items: center;
+            width: 100%;
         }
 
-        .nav-item {
+        .avatar-editable {
+            position: relative;
+            width: 108px;
+            height: 108px;
+            margin-bottom: 16px;
+            cursor: pointer;
+        }
+
+        .avatar-editable .avatar-img,
+        .avatar-editable .avatar-initials {
+            width: 108px;
+            height: 108px;
+            border: 3px solid #FFCC33;
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 10px 14px;
-            border-radius: 12px;
+            justify-content: center;
+            overflow: hidden;
+            background: #FFCC33;
+            color: #003300;
+            font-weight: 700;
+            font-size: 2rem;
+            text-transform: uppercase;
+        }
+
+        .avatar-editable .avatar-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .avatar-editable .avatar-edit-badge {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            width: 32px;
+            height: 32px;
+            background: #003300;
+            border: 2px solid #FFCC33;
+            color: #FFCC33;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            transition: 0.15s;
+        }
+
+        .avatar-editable:hover .avatar-edit-badge {
+            background: #FFCC33;
+            color: #003300;
+        }
+
+        .avatar-editable input[type="file"] {
+            display: none;
+        }
+
+        .profile-panel .name {
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #FFCC33;
+            margin-bottom: 4px;
+            word-break: break-word;
+        }
+
+        .profile-panel .role-label {
+            font-size: 0.75rem;
             color: #cbd5e1;
-            text-decoration: none;
             font-weight: 500;
-            font-size: 0.95rem;
-            transition: all 0.15s;
+            text-transform: capitalize;
+            margin-bottom: 20px;
         }
 
-        .nav-item i {
-            width: 20px;
-            text-align: center;
-            font-size: 1rem;
+        .btn-change-password {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: rgba(255, 204, 51, 0.12);
+            border: 1px solid rgba(255, 204, 51, 0.35);
+            color: #FFCC33;
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
-        .nav-item:hover {
-            background: #1e293b;
-            color: #f1f5f9;
-        }
-
-        .nav-item.active {
-            background: #1e293b;
-            color: #38bdf8;
+        .btn-change-password:hover {
+            background: rgba(255, 204, 51, 0.25);
+            color: #fff;
         }
 
         .sidebar-footer {
             margin-top: auto;
-            border-top: 1px solid #1e293b;
+            border-top: 1px solid rgba(255, 204, 51, 0.3);
             padding-top: 18px;
+            width: 100%;
         }
 
         .logout-btn-side {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 10px;
             padding: 10px 14px;
-            border-radius: 12px;
-            color: #94a3b8;
+            border-radius: 0;
+            color: #cbd5e1;
             text-decoration: none;
             font-weight: 500;
             font-size: 0.9rem;
@@ -246,87 +680,136 @@ function formatDateDisplay($date) {
         }
 
         .logout-btn-side:hover {
-            background: #1e293b;
-            color: #f1f5f9;
+            background: rgba(255, 204, 51, 0.2);
+            color: #fff;
         }
 
-        /* ----- MAIN CONTENT ----- */
+        /* ---- Main content ---- */
         .main-content {
             flex: 1;
-            padding: 0 32px 32px 32px;
+            padding: 0 32px 32px 32px;  /* No top padding so header touches top */
             display: flex;
             flex-direction: column;
         }
 
-        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-.top-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 16px 32px;
-    background: #0f172a;
-    border-radius: 0;
-    margin: 0 -32px 24px -32px;
-    flex-wrap: wrap;
-    gap: 12px;
-
-    /* ADD THESE */
-    position: sticky;
-    top: 0;
-    z-index: 200;
-}
+        /* ---- Dark Green Top Header (full width, flush) ---- */
+        .top-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 32px;
+            background: #003300;
+            margin: 0 -32px 24px -32px;  /* Stretch full width, flush with left/right */
+            flex-wrap: wrap;
+            gap: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+        }
 
         .header-left {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 28px;
+            flex-wrap: wrap;
         }
 
         .header-left h1 {
-            font-size: 1.4rem;
+            font-size: 1.25rem;
             font-weight: 700;
-            color: #f8fafc;
+            color: #FFCC33;
             letter-spacing: -0.3px;
+            white-space: nowrap;
         }
 
         .header-left h1 small {
             font-weight: 400;
             font-size: 0.85rem;
-            color: #94a3b8;
+            color: #FFCC33;
+            opacity: 0.8;
             margin-left: 8px;
         }
 
         .header-left h1 i {
-            color: #38bdf8;
+            color: #FFCC33;
             margin-right: 8px;
         }
 
+        /* ---- Header right with navigation ---- */
         .header-right {
             display: flex;
             align-items: center;
             gap: 20px;
+            flex: 1;
+            justify-content: flex-end;
         }
 
-        /* Notification bell */
+        .header-nav {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .header-nav .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 16px;
+            border-radius: 0;
+            color: #cbd5e1;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.88rem;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .header-nav .nav-item i {
+            font-size: 0.9rem;
+        }
+
+        .header-nav .nav-item:hover {
+            background: rgba(255, 204, 51, 0.2);
+            color: #fff;
+        }
+
+        .header-nav .nav-item:hover i {
+            color: #FFCC33;
+        }
+
+        .header-nav .nav-item.active {
+            background: #FFCC33;
+            color: #003300;
+            font-weight: 600;
+        }
+
+        .header-nav .nav-item.active i {
+            color: #003300;
+        }
+
         .notif-bell {
             position: relative;
             font-size: 1.3rem;
-            color: #e2e8f0;
-            background: rgba(255,255,255,0.08);
+            color: #FFCC33;
+            background: rgba(255, 204, 51, 0.2);
             width: 44px;
             height: 44px;
-            border-radius: 50%;
+            border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
             transition: 0.15s;
             cursor: pointer;
             border: none;
+            flex-shrink: 0;
         }
 
         .notif-bell:hover {
-            background: rgba(255,255,255,0.18);
+            background: rgba(255, 204, 51, 0.4);
             color: #fff;
         }
 
@@ -340,83 +823,103 @@ function formatDateDisplay($date) {
             font-weight: 700;
             width: 20px;
             height: 20px;
-            border-radius: 50%;
+            border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            border: 2px solid #0f172a;
+            border: 2px solid #003300;
         }
 
-        /* User profile chip */
-        .user-profile {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: rgba(255,255,255,0.08);
-            padding: 4px 16px 4px 6px;
-            border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.12);
-            cursor: default;
-            backdrop-filter: blur(2px);
-        }
-
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #3b82f6;
-            color: #fff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            font-size: 1rem;
-            text-transform: uppercase;
-            flex-shrink: 0;
-        }
-
-        .user-info .name {
-            font-weight: 600;
-            font-size: 0.9rem;
-            color: #f1f5f9;
-        }
-
-        .user-info .role-label {
-            font-size: 0.7rem;
-            color: #94a3b8;
-            font-weight: 500;
-            text-transform: capitalize;
-        }
-
-        /* ----- PAGE CARD ----- */
+        /* ---- Page card (sharp, bordered) ---- */
         .page-card {
-            background: #fff;
-            border-radius: 24px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
             padding: 24px 28px 32px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.02);
-            border: 1px solid #eef2f7;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
             flex: 1;
+            border-radius: 0;
         }
 
-        .page-card h2 {
-            font-size: 1.3rem;
-            margin-bottom: 8px;
+        .page-card-header {
             display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .page-card h2 i {
-            color: #2563eb;
-        }
-
-        .page-card p.sub {
-            color: #64748b;
-            font-size: 0.95rem;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
             margin-bottom: 20px;
         }
 
-        /* ----- TABLE CONTROLS ----- */
+        .page-card-header .title-section h2 {
+            font-size: 1.3rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #0f172a;
+        }
+
+        .page-card-header .title-section h2 i {
+            color: #3b82f6;
+        }
+
+        .page-card-header .title-section p.sub {
+            color: #64748b;
+            font-size: 0.9rem;
+            margin-top: 2px;
+        }
+
+        /* ---- Job commitment info (sharp) ---- */
+        .job-commitment-info {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+            min-width: 280px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
+            border-radius: 0;
+        }
+
+        .job-commitment-info .job-icon {
+            background: #3b82f6;
+            color: white;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            flex-shrink: 0;
+            border-radius: 0;
+        }
+
+        .job-commitment-info .job-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .job-commitment-info .job-details .job-title {
+            font-weight: 700;
+            color: #0f172a;
+            display: block;
+            font-size: 0.95rem;
+        }
+
+        .job-commitment-info .job-details .job-meta {
+            color: #64748b;
+            font-size: 0.8rem;
+            display: block;
+            margin-top: 2px;
+        }
+
+        .job-commitment-info .job-details .job-meta i {
+            margin-right: 4px;
+            font-size: 0.7rem;
+            color: #3b82f6;
+        }
+
+        /* ---- Table Controls (sharp) ---- */
         .table-controls {
             display: flex;
             justify-content: space-between;
@@ -426,8 +929,9 @@ function formatDateDisplay($date) {
             margin-bottom: 20px;
             padding: 12px 16px;
             background: #f8fafc;
-            border-radius: 16px;
-            border: 1px solid #eef2f7;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
+            border-radius: 0;
         }
 
         .controls-left {
@@ -445,7 +949,7 @@ function formatDateDisplay($date) {
         }
 
         .filter-label {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             font-weight: 600;
             color: #64748b;
             text-transform: uppercase;
@@ -459,9 +963,9 @@ function formatDateDisplay($date) {
             gap: 6px;
             background: #fff;
             padding: 4px 12px 4px 16px;
-            border-radius: 999px;
             border: 1px solid #e2e8f0;
             transition: 0.2s;
+            border-radius: 0;
         }
 
         .filter-item:focus-within {
@@ -479,7 +983,7 @@ function formatDateDisplay($date) {
             padding: 8px 4px;
             font-size: 0.85rem;
             background: transparent;
-            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0a1628;
             min-width: 130px;
             cursor: pointer;
@@ -491,7 +995,7 @@ function formatDateDisplay($date) {
 
         .btn-sm {
             padding: 8px 18px;
-            border-radius: 999px;
+            border-radius: 0;
             font-weight: 600;
             font-size: 0.82rem;
             display: inline-flex;
@@ -499,8 +1003,8 @@ function formatDateDisplay($date) {
             gap: 8px;
             cursor: pointer;
             transition: all 0.2s;
-            border: none;
-            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             text-decoration: none;
             white-space: nowrap;
         }
@@ -508,6 +1012,7 @@ function formatDateDisplay($date) {
         .btn-sm-primary {
             background: #0f172a;
             color: #fff;
+            border-color: #0f172a;
         }
 
         .btn-sm-primary:hover {
@@ -519,6 +1024,7 @@ function formatDateDisplay($date) {
         .btn-sm-success {
             background: #059669;
             color: #fff;
+            border-color: #059669;
         }
 
         .btn-sm-success:hover {
@@ -528,12 +1034,13 @@ function formatDateDisplay($date) {
         }
 
         .btn-sm-filter {
-            background: #2563eb;
+            background: #3b82f6;
             color: #fff;
+            border-color: #3b82f6;
         }
 
         .btn-sm-filter:hover {
-            background: #1d4ed8;
+            background: #2563eb;
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
         }
@@ -549,12 +1056,13 @@ function formatDateDisplay($date) {
             color: #0f172a;
         }
 
-        /* ----- DPR TABLE ----- */
+        /* ---- Table wrapper (sharp) ---- */
         .dpr-table-wrap {
             overflow-x: auto;
-            border-radius: 16px;
-            border: 1px solid #eef2f7;
             background: #fff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
+            border-radius: 0;
         }
 
         .dpr-table {
@@ -569,7 +1077,7 @@ function formatDateDisplay($date) {
             font-weight: 600;
             padding: 14px 16px;
             text-align: left;
-            border-bottom: 2px solid #e2e8f0;
+            border-bottom: 1px solid #e2e8f0;
             font-size: 0.8rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
@@ -577,7 +1085,7 @@ function formatDateDisplay($date) {
 
         .dpr-table td {
             padding: 14px 16px;
-            border-bottom: 1px solid #edf2f7;
+            border-bottom: 1px solid #f1f5f9;
             vertical-align: middle;
         }
 
@@ -596,31 +1104,34 @@ function formatDateDisplay($date) {
 
         .badge-status {
             padding: 4px 14px;
-            border-radius: 999px;
+            border-radius: 0;
             font-size: 0.75rem;
             font-weight: 600;
             display: inline-block;
+            border: 1px solid transparent;
         }
 
         .badge-status.in-progress {
             background: #fef9c3;
             color: #854d0e;
+            border-color: #facc15;
         }
 
         .badge-status.completed {
             background: #dcfce7;
             color: #166534;
+            border-color: #86efac;
         }
 
         .badge-status.pending {
             background: #f1f5f9;
             color: #475569;
+            border-color: #cbd5e1;
         }
 
-        /* View buttons */
         .view-btn {
             padding: 6px 16px;
-            border-radius: 999px;
+            border-radius: 0;
             font-size: 0.75rem;
             font-weight: 500;
             cursor: pointer;
@@ -628,13 +1139,14 @@ function formatDateDisplay($date) {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            font-family: inherit;
-            border: none;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
         }
 
         .view-btn-task {
             background: #dbeafe;
             color: #1d4ed8;
+            border-color: #93c5fd;
         }
 
         .view-btn-task:hover {
@@ -645,6 +1157,7 @@ function formatDateDisplay($date) {
         .view-btn-feedback {
             background: #eef2ff;
             color: #4338ca;
+            border-color: #a5b4fc;
         }
 
         .view-btn-feedback:hover {
@@ -656,6 +1169,7 @@ function formatDateDisplay($date) {
             background: #f1f5f9;
             color: #94a3b8;
             cursor: default;
+            border-color: #e2e8f0;
         }
 
         .view-btn.no-content:hover {
@@ -677,7 +1191,7 @@ function formatDateDisplay($date) {
             color: #cbd5e1;
         }
 
-        /* ----- MODAL ----- */
+        /* ===== MODAL STYLES (sharp) ===== */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -685,11 +1199,12 @@ function formatDateDisplay($date) {
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(15, 23, 42, 0.6);
+            background: rgba(15, 23, 42, 0.5);
             backdrop-filter: blur(4px);
             align-items: center;
             justify-content: center;
             z-index: 1000;
+            padding: 20px;
         }
 
         .modal-overlay.active {
@@ -698,14 +1213,30 @@ function formatDateDisplay($date) {
 
         .modal-card {
             background: #fff;
-            border-radius: 24px;
+            border: 1px solid #e2e8f0;
             max-width: 560px;
-            width: 94%;
+            width: 100%;
             padding: 32px 30px 28px;
-            box-shadow: 0 40px 60px -20px rgba(0,0,0,0.4);
+            box-shadow: 0 40px 60px -20px rgba(0,0,0,0.3);
             animation: slideUp 0.25s ease;
-            max-height: 90vh;
-            overflow-y: auto;
+            max-height: none;
+            height: auto;
+            overflow: visible;
+            position: relative;
+            border-radius: 0;
+        }
+
+        #dprModal .modal-card,
+        #taskModal .modal-card,
+        #feedbackModal .modal-card,
+        #passwordModal .modal-card {
+            max-height: none;
+            height: auto;
+            overflow: visible;
+        }
+
+        #passwordModal .modal-card {
+            max-width: 440px;
         }
 
         @keyframes slideUp {
@@ -747,6 +1278,7 @@ function formatDateDisplay($date) {
             cursor: pointer;
             padding: 0 8px;
             transition: 0.15s;
+            line-height: 1;
         }
 
         .modal-close:hover {
@@ -782,11 +1314,11 @@ function formatDateDisplay($date) {
             width: 100%;
             padding: 12px 14px;
             border: 1px solid #d1d9e6;
-            border-radius: 14px;
+            border-radius: 0;
             font-size: 0.95rem;
             background: #fafcff;
             transition: 0.15s;
-            font-family: inherit;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
         .form-group input:focus,
@@ -800,6 +1332,38 @@ function formatDateDisplay($date) {
         .form-group textarea {
             min-height: 80px;
             resize: vertical;
+            max-height: 200px;
+        }
+
+        .form-row-three {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .form-row-three .form-group {
+            margin-bottom: 0;
+        }
+
+        .form-row-three .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+        }
+
+        .form-row-three .form-group label {
+            font-size: 0.8rem;
+            margin-bottom: 4px;
+        }
+
+        @media (max-width: 600px) {
+            .form-row-three {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+            .form-row-three .form-group {
+                margin-bottom: 0;
+            }
         }
 
         .form-row {
@@ -827,12 +1391,12 @@ function formatDateDisplay($date) {
             border: 1px solid #e2e8f0;
             color: #1e293b;
             padding: 10px 24px;
-            border-radius: 999px;
+            border-radius: 0;
             font-weight: 600;
             font-size: 0.85rem;
             cursor: pointer;
             transition: 0.15s;
-            font-family: inherit;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
         .btn-close-modal:hover {
@@ -841,15 +1405,15 @@ function formatDateDisplay($date) {
 
         .btn-submit {
             background: #0f172a;
-            border: none;
+            border: 1px solid #0f172a;
             color: #fff;
             padding: 10px 28px;
-            border-radius: 999px;
+            border-radius: 0;
             font-weight: 600;
             font-size: 0.85rem;
             cursor: pointer;
             transition: 0.15s;
-            font-family: inherit;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             display: inline-flex;
             align-items: center;
             gap: 8px;
@@ -861,7 +1425,6 @@ function formatDateDisplay($date) {
             box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
         }
 
-        /* ----- VIEW CONTENT MODAL ----- */
         .view-content-display {
             padding: 8px 0 4px;
         }
@@ -891,13 +1454,16 @@ function formatDateDisplay($date) {
         .view-content-display .content-text {
             background: #f8fafc;
             padding: 16px 20px;
-            border-radius: 12px;
             font-size: 0.95rem;
             line-height: 1.7;
             color: #1e293b;
             min-height: 60px;
+            max-height: 300px;
+            overflow-y: auto;
             white-space: pre-wrap;
             word-wrap: break-word;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
         }
 
         .view-content-display .content-text.task-text {
@@ -913,7 +1479,6 @@ function formatDateDisplay($date) {
             font-style: italic;
         }
 
-        /* ----- TOAST ----- */
         .toast {
             position: fixed;
             bottom: 30px;
@@ -921,7 +1486,6 @@ function formatDateDisplay($date) {
             background: #0f172a;
             color: #f1f5f9;
             padding: 16px 24px;
-            border-radius: 16px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             display: none;
             align-items: center;
@@ -930,14 +1494,23 @@ function formatDateDisplay($date) {
             font-weight: 500;
             max-width: 400px;
             animation: slideUp 0.3s ease;
+            border: 1px solid #334155;
+            border-radius: 0;
         }
 
         .toast.success {
             background: #059669;
+            border-color: #047857;
         }
 
         .toast.error {
             background: #dc2626;
+            border-color: #b91c1c;
+        }
+
+        .toast.warning {
+            background: #d97706;
+            border-color: #b45309;
         }
 
         .toast.show {
@@ -953,18 +1526,30 @@ function formatDateDisplay($date) {
             border: 1px solid #f59e0b;
             color: #92400e;
             padding: 16px 20px;
-            border-radius: 12px;
             margin-bottom: 20px;
             display: flex;
             align-items: center;
             gap: 12px;
+            border-radius: 0;
         }
 
         .alert-box i {
             font-size: 1.2rem;
         }
 
-        /* ----- RESPONSIVE ----- */
+        @media (max-width: 1024px) {
+            .page-card-header {
+                flex-direction: column;
+            }
+            .job-commitment-info {
+                width: 100%;
+                min-width: unset;
+            }
+            .header-left {
+                gap: 16px;
+            }
+        }
+
         @media (max-width: 720px) {
             .top-header {
                 flex-direction: column;
@@ -972,8 +1557,25 @@ function formatDateDisplay($date) {
                 padding: 12px 16px;
                 margin: 0 -16px 16px -16px;
             }
+            .header-left {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
             .header-right {
-                justify-content: flex-start;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+                justify-content: center;
+                width: 100%;
+            }
+            .header-nav {
+                width: 100%;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+            .notif-bell {
+                align-self: center;
             }
             .page-card {
                 padding: 16px;
@@ -1005,6 +1607,30 @@ function formatDateDisplay($date) {
                 font-size: 0.65rem;
                 padding: 4px 10px;
             }
+            .job-commitment-info {
+                padding: 12px 16px;
+            }
+            .job-commitment-info .job-icon {
+                width: 32px;
+                height: 32px;
+                font-size: 0.9rem;
+            }
+            .job-commitment-info .job-details .job-title {
+                font-size: 0.85rem;
+            }
+            
+            .mobile-modal-fix .modal-card {
+                padding: 20px 16px;
+                max-height: none;
+                height: auto;
+                overflow: visible;
+            }
+            .view-content-display .content-text {
+                max-height: 200px;
+            }
+            .form-group textarea {
+                max-height: 150px;
+            }
         }
 
         @media (max-width: 600px) {
@@ -1024,46 +1650,33 @@ function formatDateDisplay($date) {
                 flex-direction: column;
                 gap: 8px;
             }
+            .form-row-three {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+            .form-row-three .form-group {
+                margin-bottom: 0;
+            }
         }
     </style>
 </head>
 <body>
     <div class="app-shell">
-        <!-- Sidebar Navigation -->
+        <!-- SIDEBAR: user profile panel -->
         <aside class="sidebar">
             <div class="sidebar-brand">
                 <i class="fa-solid fa-graduation-cap"></i>
-                <h2>RBAC<span>Student Portal</span></h2>
+                <h2>Role Based<span>Student Portal</span></h2>
             </div>
-            <nav class="nav-section">
-                <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item" href="apply.php"><i class="fa-solid fa-briefcase"></i> Apply Job</a>
-                <a class="nav-item" href="applications.php"><i class="fa-solid fa-file-lines"></i> My Applications</a>
-                <a class="nav-item active" href="dpr.php"><i class="fa-regular fa-calendar-check"></i> Daily Progress Report</a>
-            </nav>
-            <div class="sidebar-footer">
-                <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
-            </div>
-        </aside>
 
-        <!-- Main Workspace -->
-        <main class="main-content">
-            <!-- TOP HEADER -->
-            <div class="top-header">
-                <div class="header-left">
-                    <h1>
-                        <i class="fa-regular fa-calendar-check"></i>
-                        Daily Progress
-                        <small>DPR</small>
-                    </h1>
-                </div>
-                <div class="header-right">
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
-                    <div class="user-profile">
-                        <div class="user-avatar">
+            <div class="profile-panel">
+                <div class="avatar-editable" id="avatarEditable" title="Click to change your photo">
+                    <?php if (!empty($profilePictureUrl)): ?>
+                        <div class="avatar-img" id="avatarImgWrap">
+                            <img src="<?php echo htmlspecialchars($profilePictureUrl); ?>" alt="Profile photo" id="avatarImg" />
+                        </div>
+                    <?php else: ?>
+                        <div class="avatar-initials" id="avatarImgWrap">
                             <?php
                             $initials = '';
                             $parts = explode(' ', trim($fullname));
@@ -1075,18 +1688,74 @@ function formatDateDisplay($date) {
                             echo htmlspecialchars($initials);
                             ?>
                         </div>
-                        <div class="user-info">
-                            <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
-                            <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
-                        </div>
-                    </div>
+                    <?php endif; ?>
+                    <div class="avatar-edit-badge"><i class="fa-solid fa-camera"></i></div>
+                    <input type="file" id="avatarInput" accept="image/png, image/jpeg, image/webp, image/gif" />
+                </div>
+
+                <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
+                <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
+
+                <button class="btn-change-password" id="openPasswordModalBtn">
+                    <i class="fa-solid fa-key"></i> Change Password
+                </button>
+            </div>
+
+            <div class="sidebar-footer">
+                <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <div class="top-header">
+                <div class="header-left">
+                    <h1>
+                        <i class="fa-regular fa-calendar-check"></i>
+                        DPR
+                    </h1>
+                </div>
+                <div class="header-right">
+                    <nav class="header-nav">
+                        <a class="nav-item" href="dashboard.php"></i> Dashboard</a>
+                        <a class="nav-item" href="applications.php"></i> My Applications</a>
+                        <?php if (!$hasCommittedJob): ?>
+                            <a class="nav-item" href="apply.php"></i> Apply Job</a>
+                        <?php endif; ?>
+                        <?php if ($hasCommittedJob): ?>
+                            <a class="nav-item active" href="dpr.php"></i> Daily Progress Report</a>
+                        <?php endif; ?>
+                    </nav>
+                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
+                        <i class="fa-regular fa-bell"></i>
+                        <span class="notif-badge">3</span>
+                    </button>
                 </div>
             </div>
 
-            <!-- DPR CONTENT -->
             <div class="page-card">
-                <h2><i class="fa-regular fa-clock"></i> Progress Reports</h2>
-                <p class="sub">Track your daily time, tasks, and feedback</p>
+                <div class="page-card-header">
+                    <div class="title-section">
+                        <h2><i class="fa-regular fa-clock"></i> Progress Reports</h2>
+                        <p class="sub">Track your daily time, tasks, and feedback</p>
+                    </div>
+
+                    <div class="job-commitment-info">
+                        <div class="job-icon">
+                            <i class="fa-solid fa-briefcase"></i>
+                        </div>
+                        <div class="job-details">
+                            <span class="job-title">
+                                <?php echo htmlspecialchars($committedJob['job_title']); ?>
+                            </span>
+                            <span class="job-meta">
+                                <i class="fa-solid fa-building"></i>
+                                <?php echo htmlspecialchars($committedJob['company_name']); ?>
+                                <i class="fa-regular fa-calendar-check" style="margin-left: 8px;"></i>
+                                <?php echo date('M j, Y', strtotime($committedJob['committed_at'])); ?>
+                            </span>
+                        </div>
+                    </div>
+                </div>
 
                 <?php if (isset($tableError)): ?>
                     <div class="alert-box">
@@ -1095,7 +1764,6 @@ function formatDateDisplay($date) {
                     </div>
                 <?php endif; ?>
 
-                <!-- TABLE CONTROLS -->
                 <div class="table-controls">
                     <div class="controls-left">
                         <span class="filter-label"><i class="fa-solid fa-sliders"></i> Filters</span>
@@ -1142,7 +1810,6 @@ function formatDateDisplay($date) {
                     </div>
                 </div>
 
-                <!-- DPR TABLE -->
                 <div class="dpr-table-wrap">
                     <table class="dpr-table" id="dprTable">
                         <thead>
@@ -1163,26 +1830,42 @@ function formatDateDisplay($date) {
                                     $statusClass = str_replace(' ', '-', $statusClass);
                                     $hasTask = !empty($entry['tasks']);
                                     $hasFeedback = !empty($entry['feedback']);
+                                    $displayDate = formatDateDisplay($entry['date']);
                                     ?>
                                     <tr data-id="<?php echo $entry['id']; ?>">
-                                        <td class="date-cell"><?php echo htmlspecialchars(formatDateDisplay($entry['date'])); ?></td>
-                                        <td><?php echo htmlspecialchars($entry['time_in'] ?? '—'); ?></td>
-                                        <td><?php echo htmlspecialchars($entry['time_out'] ?? '—'); ?></td>
+                                        <td class="date-cell"><?php echo htmlspecialchars($displayDate); ?></td>
+                                        <td><?php echo htmlspecialchars(formatTimeDisplay($entry['time_in'] ?? '')); ?></td>
+                                        <td><?php echo htmlspecialchars(formatTimeDisplay($entry['time_out'] ?? '')); ?></td>
                                         <td>
-                                            <button class="view-btn view-btn-task <?php echo $hasTask ? '' : 'no-content'; ?>"
-                                                    onclick="viewTask(<?php echo $entry['id']; ?>, '<?php echo addslashes($entry['tasks'] ?? ''); ?>', '<?php echo addslashes($entry['date']); ?>', '<?php echo addslashes($entry['time_in'] ?? ''); ?>', '<?php echo addslashes($entry['time_out'] ?? ''); ?>')"
-                                                    <?php echo $hasTask ? '' : 'disabled'; ?>>
-                                                <i class="fa-regular fa-list-check"></i>
-                                                <?php echo $hasTask ? 'View Task' : 'No Task'; ?>
-                                            </button>
+                                            <?php if ($hasTask): ?>
+                                                <button class="view-btn view-btn-task view-task-btn" 
+                                                        data-id="<?php echo $entry['id']; ?>"
+                                                        data-task="<?php echo htmlspecialchars($entry['tasks'], ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-date="<?php echo htmlspecialchars($displayDate, ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-timein="<?php echo htmlspecialchars($entry['time_in'] ?? '', ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-timeout="<?php echo htmlspecialchars($entry['time_out'] ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                                                    <i class="fa-regular fa-list-check"></i> View Task
+                                                </button>
+                                            <?php else: ?>
+                                                <button class="view-btn no-content" disabled>
+                                                    <i class="fa-regular fa-list-check"></i> No Task
+                                                </button>
+                                            <?php endif; ?>
                                         </td>
                                         <td>
-                                            <button class="view-btn view-btn-feedback <?php echo $hasFeedback ? '' : 'no-content'; ?>"
-                                                    onclick="viewFeedback(<?php echo $entry['id']; ?>, '<?php echo addslashes($entry['feedback'] ?? ''); ?>', '<?php echo addslashes($entry['date']); ?>', '<?php echo addslashes($entry['tasks'] ?? ''); ?>')"
-                                                    <?php echo $hasFeedback ? '' : 'disabled'; ?>>
-                                                <i class="fa-regular fa-comment"></i>
-                                                <?php echo $hasFeedback ? 'View Feedback' : 'No Feedback'; ?>
-                                            </button>
+                                            <?php if ($hasFeedback): ?>
+                                                <button class="view-btn view-btn-feedback view-feedback-btn" 
+                                                        data-id="<?php echo $entry['id']; ?>"
+                                                        data-feedback="<?php echo htmlspecialchars($entry['feedback'], ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-date="<?php echo htmlspecialchars($displayDate, ENT_QUOTES, 'UTF-8'); ?>"
+                                                        data-task="<?php echo htmlspecialchars($entry['tasks'] ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                                                    <i class="fa-regular fa-comment"></i> View Feedback
+                                                </button>
+                                            <?php else: ?>
+                                                <button class="view-btn no-content" disabled>
+                                                    <i class="fa-regular fa-comment"></i> No Feedback
+                                                </button>
+                                            <?php endif; ?>
                                         </td>
                                         <td>
                                             <span class="badge-status <?php echo $statusClass; ?>">
@@ -1207,7 +1890,7 @@ function formatDateDisplay($date) {
         </main>
     </div>
 
-    <!-- ===== ADD DPR MODAL ===== -->
+    <!-- ADD DPR MODAL -->
     <div class="modal-overlay" id="dprModal">
         <div class="modal-card">
             <div class="modal-header">
@@ -1217,12 +1900,12 @@ function formatDateDisplay($date) {
             <div class="modal-hint">Fill in your daily progress details below.</div>
 
             <form id="dprForm">
-                <div class="form-group">
-                    <label for="entryDate"><i class="fa-regular fa-calendar"></i> Date</label>
-                    <input type="date" id="entryDate" required />
-                </div>
-
-                <div class="form-row">
+                <!-- THREE COLUMN LAYOUT: Date, Time In, Time Out -->
+                <div class="form-row-three">
+                    <div class="form-group">
+                        <label for="entryDate"><i class="fa-regular fa-calendar"></i> Date</label>
+                        <input type="date" id="entryDate" required />
+                    </div>
                     <div class="form-group">
                         <label for="entryTimeIn"><i class="fa-regular fa-clock"></i> Time In</label>
                         <input type="time" id="entryTimeIn" />
@@ -1260,7 +1943,7 @@ function formatDateDisplay($date) {
         </div>
     </div>
 
-    <!-- ===== VIEW TASK MODAL ===== -->
+    <!-- VIEW TASK MODAL -->
     <div class="modal-overlay" id="taskModal">
         <div class="modal-card">
             <div class="modal-header">
@@ -1291,7 +1974,7 @@ function formatDateDisplay($date) {
         </div>
     </div>
 
-    <!-- ===== VIEW FEEDBACK MODAL ===== -->
+    <!-- VIEW FEEDBACK MODAL -->
     <div class="modal-overlay" id="feedbackModal">
         <div class="modal-card">
             <div class="modal-header">
@@ -1322,370 +2005,83 @@ function formatDateDisplay($date) {
         </div>
     </div>
 
-    <!-- ===== TOAST ===== -->
+    <!-- CHANGE PASSWORD MODAL -->
+    <div class="modal-overlay" id="passwordModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-key"></i> Change Password</h2>
+                <button class="modal-close" id="closePasswordBtn">&times;</button>
+            </div>
+            <div class="modal-hint">Enter your current password and choose a new one.</div>
+
+            <form id="passwordForm">
+                <div class="form-group">
+                    <label for="currentPassword"><i class="fa-solid fa-lock"></i> Current Password</label>
+                    <input type="password" id="currentPassword" autocomplete="current-password" required />
+                </div>
+                <div class="form-group">
+                    <label for="newPassword"><i class="fa-solid fa-lock"></i> New Password</label>
+                    <input type="password" id="newPassword" autocomplete="new-password" minlength="8" required />
+                </div>
+                <div class="form-group">
+                    <label for="confirmPassword"><i class="fa-solid fa-lock"></i> Confirm New Password</label>
+                    <input type="password" id="confirmPassword" autocomplete="new-password" minlength="8" required />
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn-close-modal" id="closePasswordBtn2">Cancel</button>
+                    <button type="submit" class="btn-submit"><i class="fa-solid fa-check"></i> Update Password</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- TOAST -->
     <div class="toast" id="toast">
         <i class="fa-regular fa-circle-check"></i>
         <span id="toastMessage">Success!</span>
     </div>
 
     <script>
-        (function() {
-            // DOM elements
-            const modal = document.getElementById('dprModal');
-            const openBtn = document.getElementById('openModalBtn');
-            const closeBtns = document.getElementById('closeModalBtn');
-            const closeBtn2 = document.getElementById('closeModalBtn2');
-            const form = document.getElementById('dprForm');
-            const tbody = document.getElementById('dprTableBody');
-            const toast = document.getElementById('toast');
-            const toastMessage = document.getElementById('toastMessage');
-
-            // Task modal elements
-            const taskModal = document.getElementById('taskModal');
-            const closeTaskBtns = document.getElementById('closeTaskBtn');
-            const closeTaskBtn2 = document.getElementById('closeTaskBtn2');
-            const taskDate = document.getElementById('taskDate');
-            const taskTime = document.getElementById('taskTime');
-            const taskTextDisplay = document.getElementById('taskTextDisplay');
-
-            // Feedback modal elements
-            const feedbackModal = document.getElementById('feedbackModal');
-            const closeFeedbackBtns = document.getElementById('closeFeedbackBtn');
-            const closeFeedbackBtn2 = document.getElementById('closeFeedbackBtn2');
-            const feedbackDate = document.getElementById('feedbackDate');
-            const feedbackTask = document.getElementById('feedbackTask');
-            const feedbackTextDisplay = document.getElementById('feedbackTextDisplay');
-
-            // Form fields
-            const dateInput = document.getElementById('entryDate');
-            const timeInInput = document.getElementById('entryTimeIn');
-            const timeOutInput = document.getElementById('entryTimeOut');
-            const tasksInput = document.getElementById('entryTasks');
-            const feedbackInput = document.getElementById('entryFeedback');
-            const statusSelect = document.getElementById('entryStatus');
-
-            // Set default date to today
-            const today = new Date().toISOString().slice(0, 10);
-            dateInput.value = today;
-
-            // ----- Modal controls -----
-            function openModal() {
-                modal.classList.add('active');
-                document.body.style.overflow = 'hidden';
-                dateInput.value = today;
-                timeInInput.value = '';
-                timeOutInput.value = '';
-                tasksInput.value = '';
-                feedbackInput.value = '';
-                statusSelect.value = 'In Progress';
-                setTimeout(() => tasksInput.focus(), 100);
-            }
-
-            function closeModal() {
+        // ===== GLOBAL FUNCTIONS =====
+        
+        function closeTaskModal() {
+            var modal = document.getElementById('taskModal');
+            if (modal) {
                 modal.classList.remove('active');
                 document.body.style.overflow = '';
             }
+        }
 
-            openBtn.addEventListener('click', openModal);
-            closeBtns.addEventListener('click', closeModal);
-            closeBtn2.addEventListener('click', closeModal);
-
-            modal.addEventListener('click', function(e) {
-                if (e.target === modal) closeModal();
-            });
-
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && modal.classList.contains('active')) {
-                    closeModal();
-                }
-            });
-
-            // ----- Task Modal controls -----
-            function openTaskModal(date, time, task) {
-                taskDate.textContent = date || '—';
-                taskTime.textContent = time || '—';
-                
-                if (task && task.trim() !== '') {
-                    taskTextDisplay.textContent = task;
-                    taskTextDisplay.className = 'content-text task-text';
-                } else {
-                    taskTextDisplay.innerHTML = '<span class="empty-text">No task description provided for this entry.</span>';
-                    taskTextDisplay.className = 'content-text task-text';
-                }
-                
-                taskModal.classList.add('active');
-                document.body.style.overflow = 'hidden';
-            }
-
-            function closeTaskModal() {
-                taskModal.classList.remove('active');
+        function closeFeedbackModal() {
+            var modal = document.getElementById('feedbackModal');
+            if (modal) {
+                modal.classList.remove('active');
                 document.body.style.overflow = '';
             }
+        }
 
-            closeTaskBtns.addEventListener('click', closeTaskModal);
-            closeTaskBtn2.addEventListener('click', closeTaskModal);
-
-            taskModal.addEventListener('click', function(e) {
-                if (e.target === taskModal) closeTaskModal();
-            });
-
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && taskModal.classList.contains('active')) {
-                    closeTaskModal();
-                }
-            });
-
-            // ----- Feedback Modal controls -----
-            function openFeedbackModal(date, task, feedback) {
-                feedbackDate.textContent = date || '—';
-                feedbackTask.textContent = task || '—';
-                
-                if (feedback && feedback.trim() !== '') {
-                    feedbackTextDisplay.textContent = feedback;
-                    feedbackTextDisplay.className = 'content-text feedback-text';
-                } else {
-                    feedbackTextDisplay.innerHTML = '<span class="empty-text">No feedback provided for this entry.</span>';
-                    feedbackTextDisplay.className = 'content-text feedback-text';
-                }
-                
-                feedbackModal.classList.add('active');
-                document.body.style.overflow = 'hidden';
-            }
-
-            function closeFeedbackModal() {
-                feedbackModal.classList.remove('active');
+        function closeDprModal() {
+            var modal = document.getElementById('dprModal');
+            if (modal) {
+                modal.classList.remove('active');
                 document.body.style.overflow = '';
             }
-
-            closeFeedbackBtns.addEventListener('click', closeFeedbackModal);
-            closeFeedbackBtn2.addEventListener('click', closeFeedbackModal);
-
-            feedbackModal.addEventListener('click', function(e) {
-                if (e.target === feedbackModal) closeFeedbackModal();
-            });
-
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && feedbackModal.classList.contains('active')) {
-                    closeFeedbackModal();
-                }
-            });
-
-            // ----- Toast notification -----
-            function showToast(message, type = 'success') {
-                toast.className = 'toast ' + type + ' show';
-                toastMessage.textContent = message;
-                clearTimeout(toast._timeout);
-                toast._timeout = setTimeout(() => {
-                    toast.classList.remove('show');
-                }, 4000);
-            }
-
-            // ----- Format time for display (12-hour) -----
-            function formatTimeForDisplay(timeStr) {
-                if (!timeStr) return '—';
-                const parts = timeStr.split(':');
-                if (parts.length < 2) return timeStr;
-                let hour = parseInt(parts[0]);
-                const minute = parts[1];
-                const ampm = hour >= 12 ? 'PM' : 'AM';
-                hour = hour % 12 || 12;
-                return `${hour}:${minute} ${ampm}`;
-            }
-
-            // ----- Add row to table -----
-            function addRowToTable(entry) {
-                const emptyRow = tbody.querySelector('.empty-row');
-                if (emptyRow) emptyRow.remove();
-
-                const statusClass = entry.status.toLowerCase().replace(' ', '-');
-                const hasTask = entry.tasks && entry.tasks.trim() !== '';
-                const hasFeedback = entry.feedback && entry.feedback.trim() !== '';
-
-                const tr = document.createElement('tr');
-                tr.dataset.id = entry.id || 'temp';
-
-                tr.innerHTML = `
-                    <td class="date-cell">${escapeHtml(entry.date)}</td>
-                    <td>${escapeHtml(entry.timeIn || '—')}</td>
-                    <td>${escapeHtml(entry.timeOut || '—')}</td>
-                    <td>
-                        <button class="view-btn view-btn-task ${hasTask ? '' : 'no-content'}" 
-                                onclick="viewTask('${escapeHtml(entry.id)}', '${escapeHtml(entry.tasks || '')}', '${escapeHtml(entry.date)}', '${escapeHtml(entry.timeIn || '')}', '${escapeHtml(entry.timeOut || '')}')"
-                                ${hasTask ? '' : 'disabled'}>
-                            <i class="fa-regular fa-list-check"></i>
-                            ${hasTask ? 'View Task' : 'No Task'}
-                        </button>
-                    </td>
-                    <td>
-                        <button class="view-btn view-btn-feedback ${hasFeedback ? '' : 'no-content'}" 
-                                onclick="viewFeedback('${escapeHtml(entry.id)}', '${escapeHtml(entry.feedback || '')}', '${escapeHtml(entry.date)}', '${escapeHtml(entry.tasks || '')}')"
-                                ${hasFeedback ? '' : 'disabled'}>
-                            <i class="fa-regular fa-comment"></i>
-                            ${hasFeedback ? 'View Feedback' : 'No Feedback'}
-                        </button>
-                    </td>
-                    <td><span class="badge-status ${statusClass}">${escapeHtml(entry.status)}</span></td>
-                `;
-
-                tbody.insertBefore(tr, tbody.firstChild);
-            }
-
-            function escapeHtml(text) {
-                if (!text) return '';
-                return String(text).replace(/[&<>"]/g, function(m) {
-                    if (m === '&') return '&amp;';
-                    if (m === '<') return '&lt;';
-                    if (m === '>') return '&gt;';
-                    if (m === '"') return '&quot;';
-                    return m;
-                });
-            }
-
-            // ----- Handle form submission -----
-            form.addEventListener('submit', function(e) {
-                e.preventDefault();
-
-                const date = dateInput.value.trim();
-                if (!date) {
-                    showToast('Please select a date.', 'error');
-                    return;
-                }
-
-                const tasks = tasksInput.value.trim();
-                if (!tasks) {
-                    showToast('Please describe your task accomplished.', 'error');
-                    tasksInput.focus();
-                    return;
-                }
-
-                const timeIn = timeInInput.value;
-                const timeOut = timeOutInput.value;
-                const feedback = feedbackInput.value.trim();
-                const status = statusSelect.value;
-
-                const formData = new FormData();
-                formData.append('action', 'add_dpr');
-                formData.append('date', date);
-                formData.append('time_in', timeIn);
-                formData.append('time_out', timeOut);
-                formData.append('tasks', tasks);
-                formData.append('feedback', feedback);
-                formData.append('status', status);
-
-                const submitBtn = form.querySelector('button[type="submit"]');
-                submitBtn.disabled = true;
-                submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
-
-                fetch(window.location.href, {
-                        method: 'POST',
-                        body: formData
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            const newEntry = {
-                                date: formatDateDisplay(date),
-                                timeIn: timeIn ? formatTimeForDisplay(timeIn) : '—',
-                                timeOut: timeOut ? formatTimeForDisplay(timeOut) : '—',
-                                tasks: tasks,
-                                feedback: feedback || '',
-                                status: status
-                            };
-                            addRowToTable(newEntry);
-                            showToast('DPR entry added successfully!', 'success');
-                            closeModal();
-                            // Refresh page to update filter dropdown
-                            setTimeout(() => window.location.reload(), 1000);
-                        } else {
-                            showToast(data.message || 'Failed to add entry.', 'error');
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        showToast('An error occurred. Please try again.', 'error');
-                    })
-                    .finally(() => {
-                        submitBtn.disabled = false;
-                        submitBtn.innerHTML = '<i class="fa-regular fa-check"></i> Save Entry';
-                    });
-            });
-
-            toast.addEventListener('click', function() {
-                toast.classList.remove('show');
-            });
-
-        })();
-
-        // ----- Global functions for viewing content -----
-        function viewTask(id, task, date, timeIn, timeOut) {
-            const taskModal = document.getElementById('taskModal');
-            const taskDate = document.getElementById('taskDate');
-            const taskTime = document.getElementById('taskTime');
-            const taskTextDisplay = document.getElementById('taskTextDisplay');
-
-            const timeStr = timeIn && timeOut ? `${formatTimeDisplay(timeIn)} - ${formatTimeDisplay(timeOut)}` : (timeIn ? formatTimeDisplay(timeIn) : '—');
-            
-            taskDate.textContent = date || '—';
-            taskTime.textContent = timeStr || '—';
-            
-            if (task && task.trim() !== '') {
-                taskTextDisplay.textContent = task;
-                taskTextDisplay.className = 'content-text task-text';
-            } else {
-                taskTextDisplay.innerHTML = '<span class="empty-text">No task description provided for this entry.</span>';
-                taskTextDisplay.className = 'content-text task-text';
-            }
-            
-            taskModal.classList.add('active');
-            document.body.style.overflow = 'hidden';
         }
 
-        function viewFeedback(id, feedback, date, task) {
-            const feedbackModal = document.getElementById('feedbackModal');
-            const feedbackDate = document.getElementById('feedbackDate');
-            const feedbackTask = document.getElementById('feedbackTask');
-            const feedbackTextDisplay = document.getElementById('feedbackTextDisplay');
-
-            feedbackDate.textContent = date || '—';
-            feedbackTask.textContent = task || '—';
-            
-            if (feedback && feedback.trim() !== '') {
-                feedbackTextDisplay.textContent = feedback;
-                feedbackTextDisplay.className = 'content-text feedback-text';
-            } else {
-                feedbackTextDisplay.innerHTML = '<span class="empty-text">No feedback provided for this entry.</span>';
-                feedbackTextDisplay.className = 'content-text feedback-text';
+        function closePasswordModal() {
+            var modal = document.getElementById('passwordModal');
+            if (modal) {
+                modal.classList.remove('active');
+                document.body.style.overflow = '';
             }
-            
-            feedbackModal.classList.add('active');
-            document.body.style.overflow = 'hidden';
         }
 
-        function formatTimeDisplay(timeStr) {
-            if (!timeStr) return '—';
-            const parts = timeStr.split(':');
-            if (parts.length < 2) return timeStr;
-            let hour = parseInt(parts[0]);
-            const minute = parts[1];
-            const ampm = hour >= 12 ? 'PM' : 'AM';
-            hour = hour % 12 || 12;
-            return `${hour}:${minute} ${ampm}`;
-        }
-
-        // ----- Format date for display -----
-        function formatDateDisplay(dateStr) {
-            if (!dateStr) return '';
-            const date = new Date(dateStr + 'T00:00:00');
-            const options = { year: 'numeric', month: 'short', day: 'numeric' };
-            return date.toLocaleDateString('en-US', options);
-        }
-
-        // ----- Filter functions -----
         function applyFilters() {
-            const date = document.getElementById('filterDate').value;
-            const status = document.getElementById('filterStatus').value;
+            var date = document.getElementById('filterDate').value;
+            var status = document.getElementById('filterStatus').value;
 
-            let url = window.location.pathname + '?';
+            var url = window.location.pathname + '?';
             if (date) url += 'filter_date=' + date + '&';
             if (status) url += 'filter_status=' + encodeURIComponent(status) + '&';
 
@@ -1696,45 +2092,448 @@ function formatDateDisplay($date) {
             window.location.href = window.location.pathname;
         }
 
-        // Enter key for filter
+        // ===== DOM READY =====
         document.addEventListener('DOMContentLoaded', function() {
-            const filterDate = document.getElementById('filterDate');
-            const filterStatus = document.getElementById('filterStatus');
+            // Get elements
+            var dprModal = document.getElementById('dprModal');
+            var openBtn = document.getElementById('openModalBtn');
+            var closeBtns = document.getElementById('closeModalBtn');
+            var closeBtn2 = document.getElementById('closeModalBtn2');
+            var form = document.getElementById('dprForm');
+            var toast = document.getElementById('toast');
+            var toastMessage = document.getElementById('toastMessage');
 
-            filterDate.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') applyFilters();
+            // Task modal close buttons
+            document.getElementById('closeTaskBtn').addEventListener('click', closeTaskModal);
+            document.getElementById('closeTaskBtn2').addEventListener('click', closeTaskModal);
+
+            // Feedback modal close buttons
+            document.getElementById('closeFeedbackBtn').addEventListener('click', closeFeedbackModal);
+            document.getElementById('closeFeedbackBtn2').addEventListener('click', closeFeedbackModal);
+
+            // DPR modal close buttons
+            if (closeBtns) closeBtns.addEventListener('click', closeDprModal);
+            if (closeBtn2) closeBtn2.addEventListener('click', closeDprModal);
+
+            // Password modal open/close
+            var passwordModal = document.getElementById('passwordModal');
+            var openPasswordBtn = document.getElementById('openPasswordModalBtn');
+            var closePasswordBtn = document.getElementById('closePasswordBtn');
+            var closePasswordBtn2 = document.getElementById('closePasswordBtn2');
+            var passwordForm = document.getElementById('passwordForm');
+
+            if (openPasswordBtn) {
+                openPasswordBtn.addEventListener('click', function() {
+                    if (passwordModal) {
+                        passwordModal.classList.add('active');
+                        document.body.style.overflow = 'hidden';
+                        if (passwordForm) passwordForm.reset();
+                    }
+                });
+            }
+            if (closePasswordBtn) closePasswordBtn.addEventListener('click', closePasswordModal);
+            if (closePasswordBtn2) closePasswordBtn2.addEventListener('click', closePasswordModal);
+            if (passwordModal) {
+                passwordModal.addEventListener('click', function(e) {
+                    if (e.target === passwordModal) closePasswordModal();
+                });
+            }
+
+            function showToast(message, type) {
+                type = type || 'success';
+                if (!toast || !toastMessage) return;
+                toast.className = 'toast ' + type + ' show';
+                toastMessage.textContent = message;
+                clearTimeout(toast._timeout);
+                toast._timeout = setTimeout(function() {
+                    toast.classList.remove('show');
+                }, 4000);
+            }
+
+            if (passwordForm) {
+                passwordForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+
+                    var currentPassword = document.getElementById('currentPassword').value;
+                    var newPassword = document.getElementById('newPassword').value;
+                    var confirmPassword = document.getElementById('confirmPassword').value;
+
+                    if (newPassword !== confirmPassword) {
+                        showToast('New password and confirmation do not match.', 'error');
+                        return;
+                    }
+                    if (newPassword.length < 8) {
+                        showToast('New password must be at least 8 characters.', 'error');
+                        return;
+                    }
+
+                    var submitBtn = passwordForm.querySelector('button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Updating...';
+                    }
+
+                    var formData = new FormData();
+                    formData.append('action', 'change_password');
+                    formData.append('current_password', currentPassword);
+                    formData.append('new_password', newPassword);
+                    formData.append('confirm_password', confirmPassword);
+
+                    fetch(window.location.href, { method: 'POST', body: formData })
+                        .then(function(response) { return response.json(); })
+                        .then(function(data) {
+                            if (data.success) {
+                                showToast(data.message || 'Password updated successfully.', 'success');
+                                closePasswordModal();
+                            } else {
+                                showToast(data.message || 'Failed to update password.', 'error');
+                            }
+                        })
+                        .catch(function() {
+                            showToast('An error occurred. Please try again.', 'error');
+                        })
+                        .finally(function() {
+                            if (submitBtn) {
+                                submitBtn.disabled = false;
+                                submitBtn.innerHTML = '<i class="fa-solid fa-check"></i> Update Password';
+                            }
+                        });
+                });
+            }
+
+            // ===== Avatar upload =====
+            var avatarEditable = document.getElementById('avatarEditable');
+            var avatarInput = document.getElementById('avatarInput');
+            var avatarImgWrap = document.getElementById('avatarImgWrap');
+
+            if (avatarEditable && avatarInput) {
+                avatarEditable.addEventListener('click', function() {
+                    avatarInput.click();
+                });
+
+                avatarInput.addEventListener('change', function() {
+                    var file = avatarInput.files[0];
+                    if (!file) return;
+
+                    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+                        showToast('Only JPG, PNG, WEBP or GIF images are allowed.', 'error');
+                        return;
+                    }
+                    if (file.size > 2 * 1024 * 1024) {
+                        showToast('Image must be smaller than 2MB.', 'error');
+                        return;
+                    }
+
+                    var formData = new FormData();
+                    formData.append('action', 'update_avatar');
+                    formData.append('avatar', file);
+
+                    fetch(window.location.href, { method: 'POST', body: formData })
+                        .then(function(response) { return response.json(); })
+                        .then(function(data) {
+                            if (data.success) {
+                                showToast('Profile picture updated.', 'success');
+                                if (avatarImgWrap && data.path) {
+                                    avatarImgWrap.className = 'avatar-img';
+                                    avatarImgWrap.innerHTML = '<img src="' + data.path + '?t=' + Date.now() + '" alt="Profile photo" id="avatarImg" />';
+                                }
+                            } else {
+                                showToast(data.message || 'Failed to update profile picture.', 'error');
+                            }
+                        })
+                        .catch(function() {
+                            showToast('An error occurred while uploading. Please try again.', 'error');
+                        });
+                });
+            }
+
+            // Form fields
+            var dateInput = document.getElementById('entryDate');
+            var timeInInput = document.getElementById('entryTimeIn');
+            var timeOutInput = document.getElementById('entryTimeOut');
+            var tasksInput = document.getElementById('entryTasks');
+            var feedbackInput = document.getElementById('entryFeedback');
+            var statusSelect = document.getElementById('entryStatus');
+
+            // Set default date
+            var today = new Date().toISOString().slice(0, 10);
+            if (dateInput) dateInput.value = today;
+
+            // Open modal
+            if (openBtn) {
+                openBtn.addEventListener('click', function() {
+                    if (dprModal) {
+                        dprModal.classList.add('active');
+                        document.body.style.overflow = 'hidden';
+                        if (dateInput) dateInput.value = today;
+                        if (timeInInput) timeInInput.value = '';
+                        if (timeOutInput) timeOutInput.value = '';
+                        if (tasksInput) tasksInput.value = '';
+                        if (feedbackInput) feedbackInput.value = '';
+                        if (statusSelect) statusSelect.value = 'In Progress';
+                        setTimeout(function() { if (tasksInput) tasksInput.focus(); }, 100);
+                    }
+                });
+            }
+
+            // Close on overlay click
+            if (dprModal) {
+                dprModal.addEventListener('click', function(e) {
+                    if (e.target === dprModal) closeDprModal();
+                });
+            }
+
+            var taskModal = document.getElementById('taskModal');
+            if (taskModal) {
+                taskModal.addEventListener('click', function(e) {
+                    if (e.target === taskModal) closeTaskModal();
+                });
+            }
+
+            var feedbackModal = document.getElementById('feedbackModal');
+            if (feedbackModal) {
+                feedbackModal.addEventListener('click', function(e) {
+                    if (e.target === feedbackModal) closeFeedbackModal();
+                });
+            }
+
+            // Escape key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    if (taskModal && taskModal.classList.contains('active')) {
+                        closeTaskModal();
+                    }
+                    if (feedbackModal && feedbackModal.classList.contains('active')) {
+                        closeFeedbackModal();
+                    }
+                    if (dprModal && dprModal.classList.contains('active')) {
+                        closeDprModal();
+                    }
+                    if (passwordModal && passwordModal.classList.contains('active')) {
+                        closePasswordModal();
+                    }
+                }
             });
 
-            filterStatus.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') applyFilters();
+            // ===== VIEW TASK BUTTONS (Event Delegation) =====
+            document.addEventListener('click', function(e) {
+                var target = e.target.closest('.view-task-btn');
+                if (target) {
+                    var task = target.getAttribute('data-task');
+                    var date = target.getAttribute('data-date');
+                    var timeIn = target.getAttribute('data-timein');
+                    var timeOut = target.getAttribute('data-timeout');
+                    var id = target.getAttribute('data-id');
+                    
+                    console.log('View Task clicked:', { id: id, task: task, date: date, timeIn: timeIn, timeOut: timeOut });
+                    
+                    var taskModal = document.getElementById('taskModal');
+                    var taskDate = document.getElementById('taskDate');
+                    var taskTime = document.getElementById('taskTime');
+                    var taskTextDisplay = document.getElementById('taskTextDisplay');
+
+                    if (!taskModal) {
+                        console.error('Task modal not found!');
+                        return;
+                    }
+
+                    taskDate.textContent = date || '—';
+                    
+                    var timeStr = (timeIn && timeOut) ? formatTimeDisplay(timeIn) + ' - ' + formatTimeDisplay(timeOut) : (timeIn ? formatTimeDisplay(timeIn) : '—');
+                    taskTime.textContent = timeStr;
+                    
+                    if (task && task.trim() !== '') {
+                        taskTextDisplay.textContent = task;
+                        taskTextDisplay.className = 'content-text task-text';
+                    } else {
+                        taskTextDisplay.innerHTML = '<span class="empty-text">No task description provided for this entry.</span>';
+                        taskTextDisplay.className = 'content-text task-text';
+                    }
+                    
+                    taskModal.classList.add('active');
+                    document.body.style.overflow = 'hidden';
+                }
             });
+
+            // ===== VIEW FEEDBACK BUTTONS (Event Delegation) =====
+            document.addEventListener('click', function(e) {
+                var target = e.target.closest('.view-feedback-btn');
+                if (target) {
+                    var feedback = target.getAttribute('data-feedback');
+                    var date = target.getAttribute('data-date');
+                    var task = target.getAttribute('data-task');
+                    var id = target.getAttribute('data-id');
+                    
+                    console.log('View Feedback clicked:', { id: id, feedback: feedback, date: date, task: task });
+                    
+                    var feedbackModal = document.getElementById('feedbackModal');
+                    var feedbackDate = document.getElementById('feedbackDate');
+                    var feedbackTask = document.getElementById('feedbackTask');
+                    var feedbackTextDisplay = document.getElementById('feedbackTextDisplay');
+
+                    if (!feedbackModal) {
+                        console.error('Feedback modal not found!');
+                        return;
+                    }
+
+                    feedbackDate.textContent = date || '—';
+                    feedbackTask.textContent = task || '—';
+                    
+                    if (feedback && feedback.trim() !== '') {
+                        feedbackTextDisplay.textContent = feedback;
+                        feedbackTextDisplay.className = 'content-text feedback-text';
+                    } else {
+                        feedbackTextDisplay.innerHTML = '<span class="empty-text">No feedback provided for this entry.</span>';
+                        feedbackTextDisplay.className = 'content-text feedback-text';
+                    }
+                    
+                    feedbackModal.classList.add('active');
+                    document.body.style.overflow = 'hidden';
+                }
+            });
+
+            if (toast) {
+                toast.addEventListener('click', function() {
+                    toast.classList.remove('show');
+                });
+            }
+
+            // Form submission
+            if (form) {
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault();
+
+                    var date = dateInput ? dateInput.value.trim() : '';
+                    if (!date) {
+                        showToast('Please select a date.', 'error');
+                        return;
+                    }
+
+                    var tasks = tasksInput ? tasksInput.value.trim() : '';
+                    if (!tasks) {
+                        showToast('Please describe your task accomplished.', 'error');
+                        if (tasksInput) tasksInput.focus();
+                        return;
+                    }
+
+                    var timeIn = timeInInput ? timeInInput.value : '';
+                    var timeOut = timeOutInput ? timeOutInput.value : '';
+                    var feedback = feedbackInput ? feedbackInput.value.trim() : '';
+                    var status = statusSelect ? statusSelect.value : 'In Progress';
+
+                    var formData = new FormData();
+                    formData.append('action', 'add_dpr');
+                    formData.append('date', date);
+                    formData.append('time_in', timeIn);
+                    formData.append('time_out', timeOut);
+                    formData.append('tasks', tasks);
+                    formData.append('feedback', feedback);
+                    formData.append('status', status);
+
+                    var submitBtn = form.querySelector('button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+                    }
+
+                    fetch(window.location.href, {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(function(response) { return response.json(); })
+                        .then(function(data) {
+                            if (data.success) {
+                                var message = 'DPR entry added successfully!';
+                                var type = 'success';
+                                
+                                // Check for monitoring flags
+                                if (data.monitoring) {
+                                    if (data.monitoring.is_missed) {
+                                        message += ' (⚠️ ' + data.monitoring.days_late + ' days late)';
+                                        type = 'warning';
+                                    }
+                                    if (data.monitoring.retroactive_flags && data.monitoring.retroactive_flags.length > 0) {
+                                        message += ' (⚠️ Retroactive submission detected)';
+                                        type = 'warning';
+                                    }
+                                }
+                                
+                                showToast(message, type);
+                                if (closeDprModal) closeDprModal();
+                                setTimeout(function() { window.location.reload(); }, 1500);
+                            } else {
+                                showToast(data.message || 'Failed to add entry.', 'error');
+                            }
+                        })
+                        .catch(function(error) {
+                            console.error('Error:', error);
+                            showToast('An error occurred. Please try again.', 'error');
+                        })
+                        .finally(function() {
+                            if (submitBtn) {
+                                submitBtn.disabled = false;
+                                submitBtn.innerHTML = '<i class="fa-regular fa-check"></i> Save Entry';
+                            }
+                        });
+                });
+            }
+
+            // Filter enter key
+            var filterDate = document.getElementById('filterDate');
+            var filterStatus = document.getElementById('filterStatus');
+
+            if (filterDate) {
+                filterDate.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') applyFilters();
+                });
+            }
+
+            if (filterStatus) {
+                filterStatus.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') applyFilters();
+                });
+            }
         });
+
+        // Helper function for time formatting
+        function formatTimeDisplay(timeStr) {
+            if (!timeStr) return '—';
+            var parts = timeStr.split(':');
+            if (parts.length < 2) return timeStr;
+            var hour = parseInt(parts[0]);
+            var minute = parts[1];
+            var ampm = hour >= 12 ? 'PM' : 'AM';
+            hour = hour % 12 || 12;
+            return hour + ':' + minute + ' ' + ampm;
+        }
 
         // ----- PDF Export -----
         function exportPDF() {
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF('landscape', 'mm', 'a4');
+            if (typeof window.jspdf === 'undefined') {
+                alert('PDF library not loaded. Please check your internet connection.');
+                return;
+            }
 
-            // Get table data
-            const table = document.getElementById('dprTable');
-            const rows = table.querySelectorAll('tbody tr');
+            var { jsPDF } = window.jspdf;
+            var doc = new jsPDF('landscape', 'mm', 'a4');
 
-            // Skip if no data
+            var table = document.getElementById('dprTable');
+            var rows = table.querySelectorAll('tbody tr');
+
             if (rows.length === 0 || rows[0].classList.contains('empty-row')) {
                 alert('No data to export!');
                 return;
             }
 
-            // Prepare data for PDF
-            const tableData = [];
-            const headers = ['Date', 'Time In', 'Time Out', 'Task Accomplished', 'Student Feedback', 'Status'];
+            var tableData = [];
+            var headers = ['Date', 'Time In', 'Time Out', 'Task Accomplished', 'Student Feedback', 'Status'];
 
-            rows.forEach(row => {
-                const cells = row.querySelectorAll('td');
+            rows.forEach(function(row) {
+                var cells = row.querySelectorAll('td');
                 if (cells.length > 0) {
-                    const rowData = [];
-                    cells.forEach(cell => {
-                        let text = cell.textContent.trim();
+                    var rowData = [];
+                    cells.forEach(function(cell) {
+                        var text = cell.textContent.trim();
                         text = text.replace(/\s+/g, ' ');
                         rowData.push(text);
                     });
@@ -1742,23 +2541,23 @@ function formatDateDisplay($date) {
                 }
             });
 
-            // Add title
+            var studentNameEl = document.querySelector('.profile-panel .name');
+            var studentName = studentNameEl ? studentNameEl.textContent : 'Student';
+
             doc.setFontSize(20);
             doc.setTextColor(15, 23, 42);
             doc.setFont('helvetica', 'bold');
             doc.text('Daily Progress Report', 14, 22);
 
-            // Add student info
             doc.setFontSize(10);
             doc.setTextColor(100, 116, 139);
             doc.setFont('helvetica', 'normal');
-            doc.text('Student: <?php echo htmlspecialchars($fullname); ?>', 14, 30);
+            doc.text('Student: ' + studentName, 14, 30);
             doc.text('Generated: ' + new Date().toLocaleString(), 14, 36);
 
-            // Add filter info if applied
-            let filterText = '';
-            const filterDate = document.getElementById('filterDate').value;
-            const filterStatus = document.getElementById('filterStatus').value;
+            var filterText = '';
+            var filterDate = document.getElementById('filterDate') ? document.getElementById('filterDate').value : '';
+            var filterStatus = document.getElementById('filterStatus') ? document.getElementById('filterStatus').value : '';
             if (filterDate || filterStatus) {
                 filterText = 'Filtered: ';
                 if (filterDate) filterText += 'Date: ' + filterDate + ' ';
@@ -1766,7 +2565,6 @@ function formatDateDisplay($date) {
                 doc.text(filterText, 14, 42);
             }
 
-            // AutoTable
             doc.autoTable({
                 head: [headers],
                 body: tableData,
@@ -1799,7 +2597,7 @@ function formatDateDisplay($date) {
                 margin: { left: 14, right: 14 },
                 didParseCell: function(data) {
                     if (data.section === 'body' && data.column.index === 5) {
-                        const status = data.cell.text[0];
+                        var status = data.cell.text[0];
                         if (status === 'Completed') {
                             data.cell.styles.textColor = [22, 101, 52];
                         } else if (status === 'In Progress') {
@@ -1811,7 +2609,6 @@ function formatDateDisplay($date) {
                 }
             });
 
-            // Save PDF
             doc.save('DPR_Report_' + new Date().toISOString().slice(0, 10) + '.pdf');
         }
     </script>

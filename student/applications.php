@@ -11,6 +11,24 @@ $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Student';
 $role = getUserRole();
 $studentId = getUserId();
 
+// ===== PROFILE PICTURE SETTINGS =====
+$avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
+$avatarPublicPath = '../assets/uploads/avatars/';
+
+function getUserProfilePicture($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT profile_picture FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        return $stmt->fetchColumn() ?: null;
+    } catch (PDOException $e) {
+        return null;
+    }
+}
+
+// Check if student has committed to a job
+$committedJob = getStudentCommittedJob($pdo, $studentId);
+$hasCommittedJob = (bool)$committedJob;
+
 // Handle commit action
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'commit_application') {
     $applicationId = (int)($_POST['application_id'] ?? 0);
@@ -53,6 +71,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     throw new Exception('Unable to commit this application.');
                 }
 
+                $supervisorId = findSupervisorForJob($pdo, $application['job_id'] ?? 0);
+                if ($supervisorId) {
+                    createSystemNotification(
+                        $pdo,
+                        $supervisorId,
+                        $studentId,
+                        'commitment',
+                        'Student Committed to Job',
+                        'A student committed to the job "' . $application['title'] . '" at ' . $application['company_name'] . '.',
+                        'myintern.php'
+                    );
+                }
+
                 $pdo->commit();
                 $_SESSION['success'] = 'You have committed to "' . $application['title'] . '" at ' . $application['company_name'] . '.';
             } catch (Exception $e) {
@@ -66,6 +97,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     header('Location: applications.php');
     exit;
+}
+
+// Handle AJAX requests for password change and avatar update
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    // Change password
+    if ($_POST['action'] === 'change_password') {
+        $currentPassword = $_POST['current_password'] ?? '';
+        $newPassword = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
+
+        if (empty($currentPassword) || empty($newPassword) || empty($confirmPassword)) {
+            echo json_encode(['success' => false, 'message' => 'All fields are required.']);
+            exit;
+        }
+        if ($newPassword !== $confirmPassword) {
+            echo json_encode(['success' => false, 'message' => 'New password and confirmation do not match.']);
+            exit;
+        }
+        if (strlen($newPassword) < 8) {
+            echo json_encode(['success' => false, 'message' => 'New password must be at least 8 characters.']);
+            exit;
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT password FROM users WHERE id = ?");
+            $stmt->execute([$studentId]);
+            $hash = $stmt->fetchColumn();
+
+            if (!$hash || !password_verify($currentPassword, $hash)) {
+                echo json_encode(['success' => false, 'message' => 'Current password is incorrect.']);
+                exit;
+            }
+
+            $newHash = password_hash($newPassword, PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
+            $stmt->execute([$newHash, $studentId]);
+
+            echo json_encode(['success' => true, 'message' => 'Password updated successfully.']);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // Update profile picture
+    if ($_POST['action'] === 'update_avatar' && isset($_FILES['avatar'])) {
+        $file = $_FILES['avatar'];
+        $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+        $maxSize = 2 * 1024 * 1024; // 2MB
+
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            echo json_encode(['success' => false, 'message' => 'Upload failed. Please try again.']);
+            exit;
+        }
+        if (!in_array($file['type'], $allowedTypes)) {
+            echo json_encode(['success' => false, 'message' => 'Only JPG, PNG, WEBP or GIF images are allowed.']);
+            exit;
+        }
+        if ($file['size'] > $maxSize) {
+            echo json_encode(['success' => false, 'message' => 'Image must be smaller than 2MB.']);
+            exit;
+        }
+
+        if (!is_dir($avatarUploadDir)) {
+            @mkdir($avatarUploadDir, 0755, true);
+        }
+
+        $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $newFileName = 'user_' . $studentId . '_' . time() . '.' . strtolower($ext);
+        $destination = $avatarUploadDir . $newFileName;
+
+        if (move_uploaded_file($file['tmp_name'], $destination)) {
+            try {
+                $stmt = $pdo->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
+                $stmt->execute([$newFileName, $studentId]);
+
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'Profile picture updated.',
+                    'path' => $avatarPublicPath . $newFileName
+                ]);
+            } catch (PDOException $e) {
+                echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+            }
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Could not save the uploaded file.']);
+        }
+        exit;
+    }
 }
 
 // Fetch applications
@@ -106,8 +228,16 @@ if ($committedRow) {
 $applicationData = [];
 foreach ($myApplications as $application) {
     $supervisorName = trim(($application['supervisor_firstname'] ?? '') . ' ' . ($application['supervisor_middlename'] ?? '') . ' ' . ($application['supervisor_lastname'] ?? '') . ' ' . ($application['supervisor_suffix'] ?? ''));
-    $canCommit = $application['status'] === 'accepted' && ($committedApplicationId === null || $committedApplicationId === (int)$application['application_id']);
-    if ($application['status'] === 'committed') {
+    
+    // Students can only commit if:
+    // 1. Application status is 'accepted'
+    // 2. They haven't committed to ANY job yet
+    // 3. OR this specific application is already committed (to show as committed)
+    $isThisApplicationCommitted = ($application['status'] === 'committed');
+    $canCommit = $application['status'] === 'accepted' && $committedApplicationId === null;
+    
+    // If this application is already committed, keep it as committable (for display purposes)
+    if ($isThisApplicationCommitted) {
         $canCommit = true;
     }
 
@@ -123,6 +253,7 @@ foreach ($myApplications as $application) {
         'committed_at' => formatDate($application['committed_at'] ?? null),
         'can_commit' => $canCommit,
         'status_raw' => $application['status'],
+        'is_already_committed' => $isThisApplicationCommitted,
     ];
 }
 
@@ -140,6 +271,10 @@ function getApplicationStatusBadgeClass($status)
 
     return $map[$status] ?? 'badge-secondary';
 }
+
+// Current profile picture
+$profilePicture = getUserProfilePicture($pdo, $studentId);
+$profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -148,9 +283,14 @@ function getApplicationStatusBadgeClass($status)
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Applications</title>
     <link rel="stylesheet" href="../assets/styles.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <style>
-        /* ----- Reset / base overrides ----- */
+        /* ============================================================
+           Dark Green (#003300) & Golden Yellow (#FFCC33) theme
+           Sharp card edges, no rounded corners.
+           Header spans full width, flush with top.
+           ============================================================ */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -158,8 +298,8 @@ function getApplicationStatusBadgeClass($status)
         }
 
         body {
-            background: #f1f5f9;
-            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f0f2f5;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0f172a;
         }
 
@@ -168,98 +308,169 @@ function getApplicationStatusBadgeClass($status)
             min-height: 100vh;
         }
 
-        /* ----- SIDEBAR (compact, without user chip) ----- */
+        /* ---- Dark Green Sidebar (now a profile panel) ---- */
         .sidebar {
             width: 250px;
-            background: #0f172a;
+            background: #003300;
             color: #e2e8f0;
             display: flex;
             flex-direction: column;
             position: sticky;
             top: 0;
             height: 100vh;
-            padding: 24px 18px 20px;
+            padding: 28px 18px 20px;
             flex-shrink: 0;
-            overflow-y: auto;
-            transition: transform 0.3s ease;
+            border-right: 1px solid #1a4a1a;
+            align-items: center;
+            text-align: center;
         }
 
         .sidebar-brand {
             display: flex;
             align-items: center;
             gap: 10px;
-            margin-bottom: 32px;
+            margin-bottom: 28px;
+            padding: 0 6px;
         }
 
         .sidebar-brand i {
             font-size: 1.6rem;
-            color: #38bdf8;
+            color: #FFCC33;
         }
 
         .sidebar-brand h2 {
             font-size: 1.2rem;
             font-weight: 700;
             letter-spacing: -0.3px;
+            color: #FFCC33;
         }
 
         .sidebar-brand h2 span {
             display: block;
             font-weight: 400;
             font-size: 0.65rem;
-            color: #94a3b8;
+            color: #FFCC33;
+            opacity: 0.8;
             letter-spacing: 0.4px;
             text-transform: uppercase;
         }
 
-        .nav-section {
+        /* ---- Profile panel (sidebar) ---- */
+        .profile-panel {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-            flex: 1;
+            align-items: center;
+            width: 100%;
         }
 
-        .nav-item {
+        .avatar-editable {
+            position: relative;
+            width: 108px;
+            height: 108px;
+            margin-bottom: 16px;
+            cursor: pointer;
+        }
+
+        .avatar-editable .avatar-img,
+        .avatar-editable .avatar-initials {
+            width: 108px;
+            height: 108px;
+            border: 3px solid #FFCC33;
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 10px 14px;
-            border-radius: 12px;
+            justify-content: center;
+            overflow: hidden;
+            background: #FFCC33;
+            color: #003300;
+            font-weight: 700;
+            font-size: 2rem;
+            text-transform: uppercase;
+        }
+
+        .avatar-editable .avatar-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .avatar-editable .avatar-edit-badge {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            width: 32px;
+            height: 32px;
+            background: #003300;
+            border: 2px solid #FFCC33;
+            color: #FFCC33;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            transition: 0.15s;
+        }
+
+        .avatar-editable:hover .avatar-edit-badge {
+            background: #FFCC33;
+            color: #003300;
+        }
+
+        .avatar-editable input[type="file"] {
+            display: none;
+        }
+
+        .profile-panel .name {
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #FFCC33;
+            margin-bottom: 4px;
+            word-break: break-word;
+        }
+
+        .profile-panel .role-label {
+            font-size: 0.75rem;
             color: #cbd5e1;
-            text-decoration: none;
             font-weight: 500;
-            font-size: 0.95rem;
-            transition: all 0.15s;
+            text-transform: capitalize;
+            margin-bottom: 20px;
         }
 
-        .nav-item i {
-            width: 20px;
-            text-align: center;
-            font-size: 1rem;
+        .btn-change-password {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: rgba(255, 204, 51, 0.12);
+            border: 1px solid rgba(255, 204, 51, 0.35);
+            color: #FFCC33;
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
-        .nav-item:hover {
-            background: #1e293b;
-            color: #f1f5f9;
-        }
-
-        .nav-item.active {
-            background: #1e293b;
-            color: #38bdf8;
+        .btn-change-password:hover {
+            background: rgba(255, 204, 51, 0.25);
+            color: #fff;
         }
 
         .sidebar-footer {
             margin-top: auto;
-            border-top: 1px solid #1e293b;
+            border-top: 1px solid rgba(255, 204, 51, 0.3);
             padding-top: 18px;
+            width: 100%;
         }
 
         .logout-btn-side {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 10px;
             padding: 10px 14px;
-            border-radius: 12px;
-            color: #94a3b8;
+            border-radius: 0;
+            color: #cbd5e1;
             text-decoration: none;
             font-weight: 500;
             font-size: 0.9rem;
@@ -267,103 +478,135 @@ function getApplicationStatusBadgeClass($status)
         }
 
         .logout-btn-side:hover {
-            background: #1e293b;
-            color: #f1f5f9;
+            background: rgba(255, 204, 51, 0.2);
+            color: #fff;
         }
 
-        /* Mobile hamburger menu button */
-        .mobile-menu-toggle {
-            display: none;
-            background: none;
-            border: none;
-            color: #f8fafc;
-            font-size: 1.5rem;
-            cursor: pointer;
-            padding: 8px;
-        }
-
-        /* Sidebar overlay for mobile */
-        .sidebar-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 998;
-        }
-
-        /* ----- MAIN CONTENT ----- */
+        /* ---- Main content ---- */
         .main-content {
             flex: 1;
             padding: 0 32px 32px 32px;
             display: flex;
             flex-direction: column;
-            min-width: 0;
         }
 
-        /* ----- NEW TOP HEADER (blue theme matching sidebar, full width) ----- */
-        /* ----- NEW TOP HEADER (blue theme matching sidebar, full width) ----- */
-.top-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 16px 32px;
-    background: #0f172a;
-    border-radius: 0;
-    margin: 0 -32px 24px -32px;
-    flex-wrap: wrap;
-    gap: 12px;
-
-    /* ADD THESE */
-    position: sticky;
-    top: 0;
-    z-index: 200;
-}
+        /* ---- Dark Green Top Header (full width, flush) ---- */
+        .top-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 32px;
+            background: #003300;
+            margin: 0 -32px 24px -32px;
+            flex-wrap: wrap;
+            gap: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+        }
 
         .header-left {
             display: flex;
             align-items: center;
-            gap: 16px;
-            flex: 1;
-            min-width: 0;
+            gap: 28px;
+            flex-wrap: wrap;
         }
 
         .header-left h1 {
-            font-size: 1.4rem;
+            font-size: 1.25rem;
             font-weight: 700;
-            color: #f8fafc;
+            color: #FFCC33;
             letter-spacing: -0.3px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
+            white-space: nowrap;
         }
 
         .header-left h1 small {
             font-weight: 400;
             font-size: 0.85rem;
-            color: #94a3b8;
+            color: #FFCC33;
+            opacity: 0.8;
+            margin-left: 8px;
         }
 
         .header-left h1 i {
-            color: #38bdf8;
+            color: #FFCC33;
+            margin-right: 8px;
         }
 
+        .mobile-menu-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: #FFCC33;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+
+        /* ---- Header right with navigation ---- */
         .header-right {
             display: flex;
             align-items: center;
             gap: 20px;
-            flex-shrink: 0;
+            flex: 1;
+            justify-content: flex-end;
         }
 
-        /* Notification bell - light version for dark header */
+        .header-nav {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .header-nav .nav-item-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 16px;
+            border-radius: 0;
+            color: #cbd5e1;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.88rem;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .header-nav .nav-item-header i {
+            font-size: 0.9rem;
+        }
+
+        .header-nav .nav-item-header:hover {
+            background: rgba(255, 204, 51, 0.2);
+            color: #fff;
+        }
+
+        .header-nav .nav-item-header:hover i {
+            color: #FFCC33;
+        }
+
+        .header-nav .nav-item-header.active {
+            background: #FFCC33;
+            color: #003300;
+            font-weight: 600;
+        }
+
+        .header-nav .nav-item-header.active i {
+            color: #003300;
+        }
+
         .notif-bell {
             position: relative;
             font-size: 1.3rem;
-            color: #e2e8f0;
-            background: rgba(255,255,255,0.08);
+            color: #FFCC33;
+            background: rgba(255, 204, 51, 0.2);
             width: 44px;
             height: 44px;
-            border-radius: 50%;
+            border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -374,7 +617,7 @@ function getApplicationStatusBadgeClass($status)
         }
 
         .notif-bell:hover {
-            background: rgba(255,255,255,0.18);
+            background: rgba(255, 204, 51, 0.4);
             color: #fff;
         }
 
@@ -388,505 +631,282 @@ function getApplicationStatusBadgeClass($status)
             font-weight: 700;
             width: 20px;
             height: 20px;
-            border-radius: 50%;
+            border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            border: 2px solid #0f172a;
+            border: 2px solid #003300;
         }
 
-        /* User profile chip - light for dark header */
-        .user-profile {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: rgba(255,255,255,0.08);
-            padding: 4px 16px 4px 6px;
-            border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.12);
-            cursor: default;
-            backdrop-filter: blur(2px);
-            flex-shrink: 0;
-        }
-
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #3b82f6;
-            color: #fff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            font-size: 1rem;
-            text-transform: uppercase;
-            flex-shrink: 0;
-        }
-
-        .user-info .name {
-            font-weight: 600;
-            font-size: 0.9rem;
-            color: #f1f5f9;
-        }
-
-        .user-info .role-label {
-            font-size: 0.7rem;
-            color: #94a3b8;
-            font-weight: 500;
-            text-transform: capitalize;
-        }
-
-        /* ----- PAGE CARD ----- */
+        /* ---- Page card (sharp, bordered) ---- */
         .page-card {
-            background: #fff;
-            border-radius: 24px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
             padding: 24px 28px 32px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.02);
-            border: 1px solid #eef2f7;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
             flex: 1;
-            min-width: 0;
+            border-radius: 0;
         }
 
         .page-head {
             display: flex;
             justify-content: space-between;
-            align-items: flex-end;
-            gap: 16px;
+            align-items: flex-start;
             flex-wrap: wrap;
-            margin-bottom: 18px;
+            gap: 16px;
+            margin-bottom: 24px;
         }
 
         .page-head h2 {
-            margin-bottom: 6px;
-            font-size: 1.2rem;
+            font-size: 1.3rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #0f172a;
+        }
+
+        .page-head h2 i {
+            color: #3b82f6;
         }
 
         .page-head p {
             color: #64748b;
-            font-size: 0.92rem;
+            font-size: 0.9rem;
+            margin-top: 2px;
         }
 
         .notice-pill {
-            display: inline-flex;
+            background: #dcfce7;
+            color: #166534;
+            padding: 8px 18px;
+            border: 1px solid #86efac;
+            font-weight: 600;
+            font-size: 0.85rem;
+            display: flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 14px;
-            border-radius: 999px;
-            background: #eff6ff;
-            color: #1d4ed8;
-            border: 1px solid #dbeafe;
-            font-size: 0.85rem;
-            font-weight: 600;
+            border-radius: 0;
             white-space: nowrap;
         }
 
-        /* ===== TABLE WITH VERTICAL SCROLL ONLY ===== */
-        .table-wrap {
-            overflow-y: auto;
-            overflow-x: hidden;
-            border: 1px solid #e2e8f0;
-            border-radius: 16px;
-            background: #fff;
-            margin-top: 16px;
-            -webkit-overflow-scrolling: touch;
-            max-height: 500px;
-        }
-
-        /* Vertical scrollbar styling */
-        .table-wrap::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .table-wrap::-webkit-scrollbar-track {
-            background: #f1f5f9;
-            border-radius: 4px;
-        }
-
-        .table-wrap::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 4px;
-        }
-
-        .table-wrap::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
+        .notice-pill i {
+            font-size: 1rem;
         }
 
         .table-header-reminder {
-            display: flex;
-            justify-content: flex-end;
-            align-items: center;
-            padding: 12px 16px;
-            background: #fefce8;
-            border-bottom: 2px solid #fef08a;
-            border-radius: 16px 16px 0 0;
-            position: sticky;
-            top: 0;
-            z-index: 5;
+            background: #fef9c3;
+            border: 1px solid #facc15;
+            padding: 10px 16px;
+            margin-bottom: 16px;
+            border-radius: 0;
         }
 
-        .table-header-reminder .reminder-text {
+        .reminder-text {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             color: #854d0e;
             font-size: 0.85rem;
-            font-weight: 600;
+            font-weight: 500;
         }
 
-        .table-header-reminder .reminder-text i {
-            color: #eab308;
+        .reminder-text i {
             font-size: 1rem;
+            color: #eab308;
+        }
+
+        /* ---- Table (sharp) ---- */
+        .table-wrap {
+            overflow-x: auto;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
+            border-radius: 0;
         }
 
         .app-table {
             width: 100%;
             border-collapse: collapse;
-            table-layout: fixed;
-        }
-
-        .app-table thead {
-            background: #f8fafc;
-            border-bottom: 2px solid #e2e8f0;
-            position: sticky;
-            top: 0;
-            z-index: 10;
+            font-size: 0.9rem;
         }
 
         .app-table th {
+            background: #f8fafc;
+            color: #1e293b;
+            font-weight: 600;
+            padding: 14px 16px;
             text-align: left;
-            padding: 12px 14px;
-            color: #64748b;
-            font-size: 0.75rem;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 0.8rem;
             text-transform: uppercase;
-            letter-spacing: 0.4px;
-            white-space: normal;
-            word-wrap: break-word;
-            overflow-wrap: break-word;
+            letter-spacing: 0.3px;
         }
 
         .app-table td {
-            padding: 12px 14px;
+            padding: 14px 16px;
             border-bottom: 1px solid #f1f5f9;
-            vertical-align: top;
-            color: #1e293b;
-            word-wrap: break-word;
-            overflow-wrap: break-word;
+            vertical-align: middle;
         }
 
-        /* Column widths */
-        .app-table th:nth-child(1),
-        .app-table td:nth-child(1) {
-            width: 15%;
-        }
-
-        .app-table th:nth-child(2),
-        .app-table td:nth-child(2) {
-            width: 20%;
-        }
-
-        .app-table th:nth-child(3),
-        .app-table td:nth-child(3) {
-            width: 15%;
-        }
-
-        .app-table th:nth-child(4),
-        .app-table td:nth-child(4) {
-            width: 12%;
-        }
-
-        .app-table th:nth-child(5),
-        .app-table td:nth-child(5) {
-            width: 13%;
-        }
-
-        .app-table th:nth-child(6),
-        .app-table td:nth-child(6) {
-            width: 12%;
-        }
-
-        .app-table th:nth-child(7),
-        .app-table td:nth-child(7) {
-            width: 13%;
+        .app-table tbody tr:last-child td {
+            border-bottom: none;
         }
 
         .app-table tbody tr:hover {
-            background: #f8fafc;
+            background: #fafcff;
+        }
+
+        .app-table .muted {
+            color: #94a3b8;
+            font-size: 0.8rem;
+            margin-top: 2px;
         }
 
         .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 999px;
+            padding: 4px 14px;
+            border-radius: 0;
             font-size: 0.75rem;
-            font-weight: 700;
-            white-space: nowrap;
+            font-weight: 600;
+            display: inline-block;
+            border: 1px solid transparent;
         }
 
-        .badge-warning { background: #fef3c7; color: #b45309; }
-        .badge-info { background: #dbeafe; color: #1d4ed8; }
-        .badge-secondary { background: #ede9fe; color: #6d28d9; }
-        .badge-success { background: #dcfce7; color: #166534; }
-        .badge-danger { background: #fee2e2; color: #b91c1c; }
-        .badge-dark { background: #e2e8f0; color: #334155; }
+        .badge-warning {
+            background: #fef9c3;
+            color: #854d0e;
+            border-color: #facc15;
+        }
 
-        .muted {
-            color: #64748b;
-            font-size: 0.86rem;
-            line-height: 1.4;
+        .badge-info {
+            background: #dbeafe;
+            color: #1d4ed8;
+            border-color: #93c5fd;
+        }
+
+        .badge-secondary {
+            background: #f1f5f9;
+            color: #475569;
+            border-color: #cbd5e1;
+        }
+
+        .badge-success {
+            background: #dcfce7;
+            color: #166534;
+            border-color: #86efac;
+        }
+
+        .badge-danger {
+            background: #fee2e2;
+            color: #991b1b;
+            border-color: #fca5a5;
+        }
+
+        .badge-dark {
+            background: #e2e8f0;
+            color: #1e293b;
+            border-color: #94a3b8;
         }
 
         .btn-action {
+            padding: 6px 16px;
+            border-radius: 0;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 8px 12px;
-            border-radius: 10px;
-            border: none;
-            cursor: pointer;
-            font-size: 0.82rem;
-            font-weight: 600;
-            transition: all 0.15s ease;
-            white-space: nowrap;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
         }
 
         .btn-view {
-            background: #e0e7ff;
-            color: #4338ca;
+            background: #dbeafe;
+            color: #1d4ed8;
+            border-color: #93c5fd;
         }
 
         .btn-view:hover {
-            background: #c7d2fe;
-            transform: translateY(-1px);
+            background: #bfdbfe;
+            transform: scale(1.02);
         }
 
         .btn-commit {
-            background: #d1fae5;
+            background: #dcfce7;
             color: #166534;
+            border-color: #86efac;
         }
 
-        .btn-commit:hover {
-            background: #a7f3d0;
-            transform: translateY(-1px);
+        .btn-commit:hover:not(:disabled) {
+            background: #bbf7d0;
+            transform: scale(1.02);
         }
 
-        .btn-action:disabled {
-            opacity: 0.6;
+        .btn-commit:disabled {
+            opacity: 0.5;
             cursor: not-allowed;
-            transform: none !important;
-        }
-
-        .action-group {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .empty-state {
-            border: 2px dashed #dbe3ef;
-            border-radius: 16px;
-            padding: 38px 20px;
-            text-align: center;
-            color: #64748b;
-            background: #f8fafc;
-            margin-top: 16px;
-        }
-
-        .empty-state i {
-            font-size: 2rem;
+            background: #f1f5f9;
             color: #94a3b8;
-            margin-bottom: 10px;
-        }
-
-        /* ----- MODAL ----- */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(15, 23, 42, 0.6);
-            backdrop-filter: blur(5px);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-            overflow-y: auto;
-        }
-
-        .modal-container {
-            background: #ffffff;
-            width: 100%;
-            max-width: 760px;
-            border-radius: 22px;
-            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2);
-            overflow: hidden;
-            animation: modalSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-            margin: auto;
-        }
-
-        @keyframes modalSlideUp {
-            from { opacity: 0; transform: translateY(20px) scale(0.97); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-
-        .modal-header,
-        .modal-footer {
-            padding: 18px 22px;
-            background: #fafcff;
             border-color: #e2e8f0;
         }
 
-        .modal-header {
-            border-bottom: 1px solid #e2e8f0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
+        .btn-commit:disabled:hover {
+            transform: none;
         }
 
-        .modal-header h3 {
-            margin: 0;
-            font-size: 1.2rem;
-            color: #0f172a;
-            word-break: break-word;
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #94a3b8;
         }
 
-        .modal-close-btn {
-            background: #f1f5f9;
-            border: none;
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            color: #64748b;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-
-        .modal-body {
-            padding: 22px;
-            max-height: calc(85vh - 150px);
-            overflow-y: auto;
-        }
-
-        .detail-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-            margin-bottom: 18px;
-        }
-
-        .detail-card {
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 14px;
-            padding: 14px;
-        }
-
-        .detail-card label {
+        .empty-state i {
+            font-size: 3rem;
             display: block;
-            color: #64748b;
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.4px;
-            margin-bottom: 6px;
-            font-weight: 700;
+            margin-bottom: 16px;
+            color: #cbd5e1;
         }
 
-        .detail-card .value {
-            color: #0f172a;
-            font-weight: 600;
-            line-height: 1.5;
-            word-break: break-word;
+        .empty-state p {
+            font-size: 1rem;
         }
 
-        .detail-block {
-            margin-top: 16px;
-            border-top: 1px solid #eef2f7;
-            padding-top: 16px;
-        }
-
-        .detail-block h4 {
-            margin: 0 0 8px;
-            color: #0f172a;
-        }
-
-        .detail-text {
-            color: #334155;
-            line-height: 1.7;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-
-        .modal-footer {
-            border-top: 1px solid #e2e8f0;
-            display: flex;
-            justify-content: flex-end;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .btn-secondary,
-        .btn-primary {
-            padding: 10px 18px;
-            border-radius: 12px;
-            font-weight: 600;
-            border: none;
-            cursor: pointer;
-        }
-
-        .btn-secondary {
-            background: #f1f5f9;
-            color: #334155;
-        }
-
-        .btn-primary {
-            background: #16a34a;
-            color: #fff;
-        }
-
-        .btn-primary:hover {
-            background: #15803d;
-        }
-
-        .btn-primary:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        /* ===== TOAST ===== */
-        .toast {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            background: #0f172a;
-            color: #f1f5f9;
-            padding: 16px 24px;
-            border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        /* ===== MODAL STYLES (sharp) ===== */
+        .modal-overlay {
             display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.5);
+            backdrop-filter: blur(4px);
             align-items: center;
-            gap: 12px;
-            z-index: 2000;
-            font-weight: 500;
-            max-width: 400px;
-            animation: slideUp 0.3s ease;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
         }
 
-        .toast.success {
-            background: #059669;
-        }
-
-        .toast.error {
-            background: #dc2626;
-        }
-
-        .toast.show {
+        .modal-overlay.active {
             display: flex;
         }
 
-        .toast i {
-            font-size: 1.2rem;
+        .modal-container {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            max-width: 620px;
+            width: 100%;
+            padding: 32px 30px 28px;
+            box-shadow: 0 40px 60px -20px rgba(0,0,0,0.3);
+            animation: slideUp 0.25s ease;
+            max-height: 90vh;
+            overflow-y: auto;
+            border-radius: 0;
+        }
+
+        #passwordModal .modal-container {
+            max-width: 480px;
         }
 
         @keyframes slideUp {
@@ -900,159 +920,397 @@ function getApplicationStatusBadgeClass($status)
             }
         }
 
-        /* ===== RESPONSIVE BREAKPOINTS ===== */
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #edf2f7;
+        }
 
-        /* Tablets and smaller screens */
-        @media (max-width: 1024px) {
-            .main-content {
-                padding: 0 20px 20px 20px;
-            }
+        .modal-header h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #0f172a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
 
-            .top-header {
-                padding: 14px 20px;
-                margin: 0 -20px 20px -20px;
-            }
+        .modal-header h3 i {
+            color: #2563eb;
+        }
 
-            .page-card {
-                padding: 20px;
-            }
+        .modal-close-btn {
+            background: none;
+            border: none;
+            font-size: 1.8rem;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0 8px;
+            transition: 0.15s;
+            line-height: 1;
+        }
 
-            .app-table th:nth-child(1),
-            .app-table td:nth-child(1) {
-                width: 14%;
-            }
+        .modal-close-btn:hover {
+            color: #1e293b;
+        }
 
-            .app-table th:nth-child(2),
-            .app-table td:nth-child(2) {
-                width: 18%;
-            }
+        .modal-body {
+            padding: 0;
+        }
 
-            .app-table th:nth-child(3),
-            .app-table td:nth-child(3) {
-                width: 14%;
-            }
+        .detail-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
 
-            .app-table th:nth-child(4),
-            .app-table td:nth-child(4) {
-                width: 11%;
-            }
-
-            .app-table th:nth-child(5),
-            .app-table td:nth-child(5) {
-                width: 13%;
-            }
-
-            .app-table th:nth-child(6),
-            .app-table td:nth-child(6) {
-                width: 14%;
-            }
-
-            .app-table th:nth-child(7),
-            .app-table td:nth-child(7) {
-                width: 16%;
-            }
-
-            .toast {
-                bottom: 20px;
-                right: 20px;
-                padding: 14px 20px;
-                font-size: 0.9rem;
-                max-width: 350px;
+        @media (max-width: 500px) {
+            .detail-grid {
+                grid-template-columns: 1fr;
             }
         }
 
-        /* Mobile landscape and tablets */
-        @media (max-width: 768px) {
-            .mobile-menu-toggle {
-                display: block;
-            }
+        .detail-card {
+            background: #f8fafc;
+            padding: 14px 16px;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+        }
 
+        .detail-card label {
+            display: block;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #64748b;
+            margin-bottom: 4px;
+        }
+
+        .detail-card .value {
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 0.95rem;
+        }
+
+        .detail-block {
+            margin-top: 16px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 16px;
+        }
+
+        .detail-block h4 {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .detail-block h4 i {
+            color: #64748b;
+        }
+
+        .detail-text {
+            background: #f8fafc;
+            padding: 14px 18px;
+            font-size: 0.9rem;
+            line-height: 1.7;
+            color: #1e293b;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 24px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 22px;
+        }
+
+        .btn-primary {
+            background: #0f172a;
+            border: 1px solid #0f172a;
+            color: #fff;
+            padding: 10px 28px;
+            border-radius: 0;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #1e293b;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            color: #1e293b;
+            padding: 10px 24px;
+            border-radius: 0;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .btn-secondary:hover {
+            background: #e9edf4;
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #1e293b;
+            margin-bottom: 5px;
+        }
+
+        .form-group label i {
+            margin-right: 6px;
+            color: #64748b;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #d1d9e6;
+            border-radius: 0;
+            font-size: 0.95rem;
+            background: #fafcff;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .form-group input:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 24px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 22px;
+        }
+
+        /* ---- Toast ---- */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 2000;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+            border: 1px solid #334155;
+            border-radius: 0;
+        }
+
+        .toast.success {
+            background: #059669;
+            border-color: #047857;
+        }
+
+        .toast.error {
+            background: #dc2626;
+            border-color: #b91c1c;
+        }
+
+        .toast.warning {
+            background: #d97706;
+            border-color: #b45309;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        /* ---- Responsive ---- */
+        @media (max-width: 1024px) {
+            .page-head {
+                flex-direction: column;
+            }
+            .notice-pill {
+                white-space: normal;
+            }
+        }
+
+        @media (max-width: 768px) {
             .sidebar {
                 position: fixed;
                 top: 0;
-                left: 0;
+                left: -280px;
                 width: 280px;
                 height: 100vh;
-                z-index: 999;
-                transform: translateX(-100%);
-                box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+                z-index: 1001;
+                transition: left 0.3s ease;
+                overflow-y: auto;
             }
 
             .sidebar.open {
-                transform: translateX(0);
+                left: 0;
+            }
+
+            .sidebar-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 1000;
             }
 
             .sidebar-overlay.show {
                 display: block;
             }
 
-            .main-content {
-                padding: 0 16px 16px 16px;
+            .mobile-menu-toggle {
+                display: block;
             }
 
             .top-header {
+                flex-direction: column;
+                align-items: stretch;
                 padding: 12px 16px;
                 margin: 0 -16px 16px -16px;
-                flex-wrap: wrap;
             }
 
             .header-left {
+                flex-direction: row;
+                align-items: center;
                 gap: 12px;
+                justify-content: space-between;
+                width: 100%;
             }
 
             .header-left h1 {
                 font-size: 1.1rem;
             }
 
-            .header-left h1 small {
-                font-size: 0.7rem;
-            }
-
             .header-right {
+                flex-direction: column;
+                align-items: stretch;
                 gap: 12px;
+                justify-content: center;
+                width: 100%;
             }
 
-            .user-profile {
-                padding: 3px 12px 3px 4px;
+            .header-nav {
+                width: 100%;
+                justify-content: center;
+                flex-wrap: wrap;
             }
 
-            .user-avatar {
-                width: 34px;
-                height: 34px;
+            .header-nav .nav-item-header {
+                padding: 6px 12px;
                 font-size: 0.8rem;
-            }
-
-            .user-info .name {
-                font-size: 0.8rem;
-            }
-
-            .user-info .role-label {
-                font-size: 0.6rem;
             }
 
             .notif-bell {
-                width: 38px;
-                height: 38px;
-                font-size: 1.1rem;
-            }
-
-            .notif-badge {
-                width: 18px;
-                height: 18px;
-                font-size: 0.5rem;
+                align-self: center;
             }
 
             .page-card {
                 padding: 16px;
-                border-radius: 16px;
+            }
+
+            .app-table th,
+            .app-table td {
+                padding: 10px 12px;
+                font-size: 0.8rem;
+            }
+
+            .modal-container {
+                padding: 24px 18px;
+                max-height: 95vh;
+                margin: 10px;
+            }
+
+            .btn-action {
+                font-size: 0.65rem;
+                padding: 4px 10px;
+            }
+
+            .detail-grid {
+                grid-template-columns: 1fr;
             }
 
             .page-head h2 {
-                font-size: 1rem;
+                font-size: 1.1rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .header-nav .nav-item-header {
+                font-size: 0.7rem;
+                padding: 4px 8px;
             }
 
-            .page-head p {
-                font-size: 0.8rem;
+            .header-nav .nav-item-header i {
+                font-size: 0.7rem;
+            }
+
+            .app-table th,
+            .app-table td {
+                padding: 8px 6px;
+                font-size: 0.7rem;
+            }
+
+            .btn-action {
+                font-size: 0.6rem;
+                padding: 3px 6px;
+            }
+
+            .status-badge {
+                font-size: 0.65rem;
+                padding: 2px 8px;
             }
 
             .notice-pill {
@@ -1060,345 +1318,14 @@ function getApplicationStatusBadgeClass($status)
                 padding: 6px 12px;
             }
 
-            .table-wrap {
-                max-height: 350px;
-                border-radius: 12px;
-            }
-
-            .table-header-reminder {
-                justify-content: center;
-                padding: 10px 12px;
-            }
-
-            .table-header-reminder .reminder-text {
-                font-size: 0.7rem;
-                text-align: center;
-            }
-
-            .app-table th,
-            .app-table td {
-                padding: 8px 10px;
-                font-size: 0.7rem;
-            }
-
-            .app-table th:nth-child(1),
-            .app-table td:nth-child(1) {
-                width: 13%;
-            }
-
-            .app-table th:nth-child(2),
-            .app-table td:nth-child(2) {
-                width: 17%;
-            }
-
-            .app-table th:nth-child(3),
-            .app-table td:nth-child(3) {
-                width: 13%;
-            }
-
-            .app-table th:nth-child(4),
-            .app-table td:nth-child(4) {
-                width: 10%;
-            }
-
-            .app-table th:nth-child(5),
-            .app-table td:nth-child(5) {
-                width: 12%;
-            }
-
-            .app-table th:nth-child(6),
-            .app-table td:nth-child(6) {
-                width: 15%;
-            }
-
-            .app-table th:nth-child(7),
-            .app-table td:nth-child(7) {
-                width: 20%;
-            }
-
-            .btn-action {
-                font-size: 0.65rem;
-                padding: 5px 8px;
-            }
-
-            .status-badge {
-                font-size: 0.65rem;
-                padding: 2px 6px;
-            }
-
-            .detail-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .modal-container {
-                margin: 10px;
-                max-width: 100%;
-                border-radius: 16px;
-            }
-
-            .modal-header,
             .modal-footer {
-                padding: 14px 16px;
-            }
-
-            .modal-body {
-                padding: 16px;
-                max-height: calc(80vh - 120px);
-            }
-
-            .detail-card {
-                padding: 12px;
-            }
-
-            .toast {
-                bottom: 16px;
-                right: 16px;
-                padding: 12px 16px;
-                font-size: 0.85rem;
-                max-width: 300px;
-            }
-        }
-
-        /* Small mobile phones */
-        @media (max-width: 480px) {
-            .sidebar {
-                width: 100%;
-                max-width: 300px;
-            }
-
-            .top-header {
-                padding: 10px 12px;
-                margin: 0 -12px 12px -12px;
-                gap: 8px;
-            }
-
-            .header-left h1 {
-                font-size: 0.95rem;
-            }
-
-            .header-left h1 small {
-                font-size: 0.6rem;
-            }
-
-            .user-profile {
-                padding: 2px 8px 2px 3px;
-            }
-
-            .user-avatar {
-                width: 28px;
-                height: 28px;
-                font-size: 0.7rem;
-            }
-
-            .user-info .name {
-                font-size: 0.7rem;
-            }
-
-            .user-info .role-label {
-                display: none;
-            }
-
-            .notif-bell {
-                width: 32px;
-                height: 32px;
-                font-size: 0.95rem;
-            }
-
-            .notif-badge {
-                width: 16px;
-                height: 16px;
-                font-size: 0.45rem;
-                top: -4px;
-                right: -4px;
-            }
-
-            .page-card {
-                padding: 12px;
-                border-radius: 12px;
-            }
-
-            .page-head {
                 flex-direction: column;
-                align-items: flex-start;
             }
 
-            .notice-pill {
-                font-size: 0.7rem;
-                padding: 4px 10px;
-                white-space: normal;
-            }
-
-            .table-wrap {
-                max-height: 300px;
-                border-radius: 12px;
-            }
-
-            .table-header-reminder {
-                padding: 8px 10px;
-            }
-
-            .table-header-reminder .reminder-text {
-                font-size: 0.65rem;
-            }
-
-            .app-table th,
-            .app-table td {
-                padding: 6px 8px;
-                font-size: 0.65rem;
-            }
-
-            .app-table th:nth-child(1),
-            .app-table td:nth-child(1) {
-                width: 12%;
-            }
-
-            .app-table th:nth-child(2),
-            .app-table td:nth-child(2) {
-                width: 16%;
-            }
-
-            .app-table th:nth-child(3),
-            .app-table td:nth-child(3) {
-                width: 12%;
-            }
-
-            .app-table th:nth-child(4),
-            .app-table td:nth-child(4) {
-                width: 10%;
-            }
-
-            .app-table th:nth-child(5),
-            .app-table td:nth-child(5) {
-                width: 12%;
-            }
-
-            .app-table th:nth-child(6),
-            .app-table td:nth-child(6) {
-                width: 16%;
-            }
-
-            .app-table th:nth-child(7),
-            .app-table td:nth-child(7) {
-                width: 22%;
-            }
-
-            .btn-action {
-                font-size: 0.6rem;
-                padding: 4px 6px;
-            }
-
-            .status-badge {
-                font-size: 0.6rem;
-                padding: 2px 5px;
-            }
-
-            .modal-container {
-                margin: 8px;
-                border-radius: 12px;
-            }
-
-            .modal-header h3 {
-                font-size: 1rem;
-            }
-
-            .modal-body {
-                padding: 12px;
-            }
-
-            .detail-card {
-                padding: 10px;
-            }
-
-            .detail-card label {
-                font-size: 0.65rem;
-            }
-
-            .detail-card .value {
-                font-size: 0.85rem;
-            }
-
-            .btn-primary,
-            .btn-secondary {
-                padding: 8px 14px;
-                font-size: 0.85rem;
+            .modal-footer .btn-primary,
+            .modal-footer .btn-secondary {
                 width: 100%;
                 justify-content: center;
-            }
-
-            .modal-footer {
-                flex-direction: column-reverse;
-            }
-
-            .toast {
-                bottom: 12px;
-                right: 12px;
-                left: 12px;
-                padding: 12px 16px;
-                font-size: 0.8rem;
-                max-width: none;
-                border-radius: 12px;
-            }
-        }
-
-        /* Very small screens */
-        @media (max-width: 360px) {
-            .header-left h1 {
-                font-size: 0.8rem;
-            }
-
-            .user-avatar {
-                width: 24px;
-                height: 24px;
-                font-size: 0.6rem;
-            }
-
-            .user-info .name {
-                font-size: 0.65rem;
-            }
-
-            .notif-bell {
-                width: 28px;
-                height: 28px;
-                font-size: 0.8rem;
-            }
-
-            .notif-badge {
-                width: 14px;
-                height: 14px;
-                font-size: 0.4rem;
-            }
-
-            .table-wrap {
-                max-height: 250px;
-            }
-
-            .app-table th,
-            .app-table td {
-                padding: 4px 6px;
-                font-size: 0.6rem;
-            }
-
-            .app-table th:nth-child(6),
-            .app-table td:nth-child(6) {
-                width: 18%;
-            }
-
-            .app-table th:nth-child(7),
-            .app-table td:nth-child(7) {
-                width: 24%;
-            }
-
-            .btn-action {
-                font-size: 0.55rem;
-                padding: 3px 5px;
-            }
-
-            .toast {
-                bottom: 10px;
-                right: 10px;
-                left: 10px;
-                padding: 10px 14px;
-                font-size: 0.75rem;
             }
         }
     </style>
@@ -1408,18 +1335,45 @@ function getApplicationStatusBadgeClass($status)
         <!-- Sidebar Overlay for mobile -->
         <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
-        <!-- SIDEBAR (without user chip) -->
+        <!-- SIDEBAR: user profile panel -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
                 <i class="fa-solid fa-graduation-cap"></i>
-                <h2>RBAC<span>Student Portal</span></h2>
+                <h2>Role Based<span>Student Portal</span></h2>
             </div>
-            <nav class="nav-section">
-                <a class="nav-item " href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item " href="apply.php"><i class="fa-solid fa-briefcase"></i> Apply Job</a>
-                <a class="nav-item active" href="applications.php"><i class="fa-solid fa-file-lines"></i> My Applications</a>
-                <a class="nav-item " href="dpr.php"><i class="fa-regular fa-calendar-check"></i> Daily Progress Report</a>
-            </nav>
+
+            <div class="profile-panel">
+                <div class="avatar-editable" id="avatarEditable" title="Click to change your photo">
+                    <?php if (!empty($profilePictureUrl)): ?>
+                        <div class="avatar-img" id="avatarImgWrap">
+                            <img src="<?php echo htmlspecialchars($profilePictureUrl); ?>" alt="Profile photo" id="avatarImg" />
+                        </div>
+                    <?php else: ?>
+                        <div class="avatar-initials" id="avatarImgWrap">
+                            <?php
+                            $initials = '';
+                            $parts = explode(' ', trim($fullname));
+                            if (count($parts) >= 2) {
+                                $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
+                            } else {
+                                $initials = strtoupper(substr($fullname, 0, 2));
+                            }
+                            echo htmlspecialchars($initials);
+                            ?>
+                        </div>
+                    <?php endif; ?>
+                    <div class="avatar-edit-badge"><i class="fa-solid fa-camera"></i></div>
+                    <input type="file" id="avatarInput" accept="image/png, image/jpeg, image/webp, image/gif" />
+                </div>
+
+                <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
+                <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
+
+                <button class="btn-change-password" id="openPasswordModalBtn">
+                    <i class="fa-solid fa-key"></i> Change Password
+                </button>
+            </div>
+
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
             </div>
@@ -1427,52 +1381,44 @@ function getApplicationStatusBadgeClass($status)
 
         <!-- MAIN CONTENT -->
         <main class="main-content">
-            <!-- NEW HEADER: full width, no rounded corners, matching sidebar -->
+            <!-- HEADER: full width, dark green, flush with top -->
             <div class="top-header">
                 <div class="header-left">
                     <button class="mobile-menu-toggle" id="menuToggle" aria-label="Toggle menu">
                         <i class="fa-solid fa-bars"></i>
                     </button>
                     <h1>
-                        <i class="fa-solid fa-file-lines"></i>
+                        <i class="fa-regular fa-calendar-check"></i>
                         My Applications
-                        <small>Student</small>
                     </h1>
                 </div>
                 <div class="header-right">
-                    <!-- Notification bell with badge -->
+                    <!-- Header Navigation -->
+                    <nav class="header-nav">
+                        <a class="nav-item-header" href="dashboard.php"></i> Dashboard</a>
+                       
+                        <?php if (!$hasCommittedJob): ?>
+                            <a class="nav-item-header" href="apply.php"></i> Apply Job</a>
+                        <?php endif; ?>
+                         <a class="nav-item-header active" href="applications.php"></i> My Applications</a>
+                        <?php if ($hasCommittedJob): ?>
+                            <a class="nav-item-header" href="dpr.php"></i> Daily Progress Report</a>
+                        <?php endif; ?>
+                    </nav>
+
+                    <!-- Notification bell -->
                     <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
                         <i class="fa-regular fa-bell"></i>
                         <span class="notif-badge">3</span>
                     </button>
-
-                    <!-- User profile (avatar + name + role) -->
-                    <div class="user-profile">
-                        <div class="user-avatar">
-                            <?php
-                                $initials = '';
-                                $parts = explode(' ', trim($fullname));
-                                if (count($parts) >= 2) {
-                                    $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
-                                } else {
-                                    $initials = strtoupper(substr($fullname, 0, 2));
-                                }
-                                echo htmlspecialchars($initials);
-                            ?>
-                        </div>
-                        <div class="user-info">
-                            <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
-                            <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
-                        </div>
-                    </div>
                 </div>
             </div>
 
-            <!-- PAGE CARD (same as before) -->
+            <!-- PAGE CARD -->
             <div class="page-card">
                 <div class="page-head">
                     <div>
-                        <h2>Submitted Applications</h2>
+                        <h2><i class="fa-regular fa-folder-open"></i> Submitted Applications</h2>
                         <p>Review your submitted applications, open the details modal, and commit to one accepted job only.</p>
                     </div>
                     <?php if ($committedApplicationId): ?>
@@ -1552,7 +1498,7 @@ function getApplicationStatusBadgeClass($status)
                     </div>
                 <?php else: ?>
                     <div class="empty-state">
-                        <i class="fa-solid fa-folder-open"></i>
+                        <i class="fa-regular fa-folder-open"></i>
                         <p>No applications found yet.</p>
                     </div>
                 <?php endif; ?>
@@ -1560,40 +1506,40 @@ function getApplicationStatusBadgeClass($status)
         </main>
     </div>
 
-    <!-- MODAL -->
+    <!-- APPLICATION DETAIL MODAL -->
     <div class="modal-overlay" id="applicationModal">
         <div class="modal-container">
             <div class="modal-header">
-                <h3 id="modalTitle">Application Details</h3>
+                <h3 id="modalTitle"><i class="fa-regular fa-file-lines"></i> Application Details</h3>
                 <button type="button" class="modal-close-btn" onclick="closeApplicationModal()">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="detail-grid">
                     <div class="detail-card">
-                        <label>Company</label>
+                        <label><i class="fa-regular fa-building"></i> Company</label>
                         <div class="value" id="modalCompany"></div>
                     </div>
                     <div class="detail-card">
-                        <label>Supervisor</label>
+                        <label><i class="fa-regular fa-user"></i> Supervisor</label>
                         <div class="value" id="modalSupervisor"></div>
                     </div>
                     <div class="detail-card">
-                        <label>Status</label>
+                        <label><i class="fa-regular fa-flag"></i> Status</label>
                         <div class="value" id="modalStatus"></div>
                     </div>
                     <div class="detail-card">
-                        <label>Applied / Committed</label>
+                        <label><i class="fa-regular fa-calendar"></i> Applied / Committed</label>
                         <div class="value" id="modalAppliedAt"></div>
                     </div>
                 </div>
 
                 <div class="detail-block">
-                    <h4>Description</h4>
+                    <h4><i class="fa-regular fa-align-left"></i> Description</h4>
                     <div class="detail-text" id="modalDescription"></div>
                 </div>
 
                 <div class="detail-block">
-                    <h4>Requirements</h4>
+                    <h4><i class="fa-regular fa-list-check"></i> Requirements</h4>
                     <div class="detail-text" id="modalRequirements"></div>
                 </div>
             </div>
@@ -1606,6 +1552,37 @@ function getApplicationStatusBadgeClass($status)
                     </button>
                 </form>
                 <button type="button" class="btn-secondary" onclick="closeApplicationModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CHANGE PASSWORD MODAL -->
+    <div class="modal-overlay" id="passwordModal">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-key"></i> Change Password</h3>
+                <button type="button" class="modal-close-btn" id="closePasswordBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="color: #64748b; margin-bottom: 20px;">Enter your current password and choose a new one.</p>
+                <form id="passwordForm">
+                    <div class="form-group">
+                        <label for="currentPassword"><i class="fa-solid fa-lock"></i> Current Password</label>
+                        <input type="password" id="currentPassword" autocomplete="current-password" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="newPassword"><i class="fa-solid fa-lock"></i> New Password</label>
+                        <input type="password" id="newPassword" autocomplete="new-password" minlength="8" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="confirmPassword"><i class="fa-solid fa-lock"></i> Confirm New Password</label>
+                        <input type="password" id="confirmPassword" autocomplete="new-password" minlength="8" required />
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn-secondary" id="closePasswordBtn2">Cancel</button>
+                        <button type="submit" class="btn-primary"><i class="fa-solid fa-check"></i> Update Password</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -1623,7 +1600,39 @@ function getApplicationStatusBadgeClass($status)
         const commitForm = document.getElementById('commitForm');
         const commitApplicationId = document.getElementById('commitApplicationId');
 
-        // Mobile menu toggle
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        <?php if (isset($_SESSION['success'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['success']); ?>', 'success');
+            });
+            <?php unset($_SESSION['success']); ?>
+        <?php endif; ?>
+
+        <?php if (isset($_SESSION['error'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['error']); ?>', 'error');
+            });
+            <?php unset($_SESSION['error']); ?>
+        <?php endif; ?>
+
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
+
+        // ===== MOBILE MENU TOGGLE =====
         const sidebar = document.getElementById('sidebar');
         const menuToggle = document.getElementById('menuToggle');
         const sidebarOverlay = document.getElementById('sidebarOverlay');
@@ -1648,54 +1657,148 @@ function getApplicationStatusBadgeClass($status)
             sidebarOverlay.addEventListener('click', closeSidebar);
         }
 
-        // Close sidebar on escape key
         document.addEventListener('keydown', function(event) {
             if (event.key === 'Escape' && sidebar.classList.contains('open')) {
                 closeSidebar();
             }
         });
 
-        // Close sidebar on window resize if screen becomes larger
         window.addEventListener('resize', function() {
             if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
                 closeSidebar();
             }
         });
 
-        // ===== TOAST =====
-        function showToast(message, type = 'success') {
-            const toast = document.getElementById('toast');
-            const toastMessage = document.getElementById('toastMessage');
-            
-            toast.className = 'toast ' + type + ' show';
-            toastMessage.textContent = message;
-            
-            clearTimeout(toast._timeout);
-            toast._timeout = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 4000);
+        // ===== PASSWORD MODAL =====
+        const passwordModal = document.getElementById('passwordModal');
+        const openPasswordBtn = document.getElementById('openPasswordModalBtn');
+        const closePasswordBtn = document.getElementById('closePasswordBtn');
+        const closePasswordBtn2 = document.getElementById('closePasswordBtn2');
+        const passwordForm = document.getElementById('passwordForm');
+
+        if (openPasswordBtn) {
+            openPasswordBtn.addEventListener('click', function() {
+                if (passwordModal) {
+                    passwordModal.style.display = 'flex';
+                    document.body.style.overflow = 'hidden';
+                    if (passwordForm) passwordForm.reset();
+                }
+            });
         }
 
-        // Check for session messages and show as toast
-        <?php if (isset($_SESSION['success'])): ?>
-            document.addEventListener('DOMContentLoaded', function() {
-                showToast('<?php echo htmlspecialchars($_SESSION['success']); ?>', 'success');
+        function closePasswordModal() {
+            if (passwordModal) {
+                passwordModal.style.display = 'none';
+                document.body.style.overflow = '';
+            }
+        }
+
+        if (closePasswordBtn) closePasswordBtn.addEventListener('click', closePasswordModal);
+        if (closePasswordBtn2) closePasswordBtn2.addEventListener('click', closePasswordModal);
+        if (passwordModal) {
+            passwordModal.addEventListener('click', function(e) {
+                if (e.target === passwordModal) closePasswordModal();
             });
-            <?php unset($_SESSION['success']); ?>
-        <?php endif; ?>
+        }
 
-        <?php if (isset($_SESSION['error'])): ?>
-            document.addEventListener('DOMContentLoaded', function() {
-                showToast('<?php echo htmlspecialchars($_SESSION['error']); ?>', 'error');
+        if (passwordForm) {
+            passwordForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                var currentPassword = document.getElementById('currentPassword').value;
+                var newPassword = document.getElementById('newPassword').value;
+                var confirmPassword = document.getElementById('confirmPassword').value;
+
+                if (newPassword !== confirmPassword) {
+                    showToast('New password and confirmation do not match.', 'error');
+                    return;
+                }
+                if (newPassword.length < 8) {
+                    showToast('New password must be at least 8 characters.', 'error');
+                    return;
+                }
+
+                var submitBtn = passwordForm.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Updating...';
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'change_password');
+                formData.append('current_password', currentPassword);
+                formData.append('new_password', newPassword);
+                formData.append('confirm_password', confirmPassword);
+
+                fetch(window.location.href, { method: 'POST', body: formData })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showToast(data.message || 'Password updated successfully.', 'success');
+                            closePasswordModal();
+                        } else {
+                            showToast(data.message || 'Failed to update password.', 'error');
+                        }
+                    })
+                    .catch(function() {
+                        showToast('An error occurred. Please try again.', 'error');
+                    })
+                    .finally(function() {
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = '<i class="fa-solid fa-check"></i> Update Password';
+                        }
+                    });
             });
-            <?php unset($_SESSION['error']); ?>
-        <?php endif; ?>
+        }
 
-        // Toast click to dismiss
-        document.getElementById('toast').addEventListener('click', function() {
-            this.classList.remove('show');
-        });
+        // ===== AVATAR UPLOAD =====
+        var avatarEditable = document.getElementById('avatarEditable');
+        var avatarInput = document.getElementById('avatarInput');
+        var avatarImgWrap = document.getElementById('avatarImgWrap');
 
+        if (avatarEditable && avatarInput) {
+            avatarEditable.addEventListener('click', function() {
+                avatarInput.click();
+            });
+
+            avatarInput.addEventListener('change', function() {
+                var file = avatarInput.files[0];
+                if (!file) return;
+
+                if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+                    showToast('Only JPG, PNG, WEBP or GIF images are allowed.', 'error');
+                    return;
+                }
+                if (file.size > 2 * 1024 * 1024) {
+                    showToast('Image must be smaller than 2MB.', 'error');
+                    return;
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'update_avatar');
+                formData.append('avatar', file);
+
+                fetch(window.location.href, { method: 'POST', body: formData })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showToast('Profile picture updated.', 'success');
+                            if (avatarImgWrap && data.path) {
+                                avatarImgWrap.className = 'avatar-img';
+                                avatarImgWrap.innerHTML = '<img src="' + data.path + '?t=' + Date.now() + '" alt="Profile photo" id="avatarImg" />';
+                            }
+                        } else {
+                            showToast(data.message || 'Failed to update profile picture.', 'error');
+                        }
+                    })
+                    .catch(function() {
+                        showToast('An error occurred while uploading. Please try again.', 'error');
+                    });
+            });
+        }
+
+        // ===== APPLICATION MODAL =====
         function openApplicationModal(applicationId) {
             const data = applicationMap[applicationId];
             if (!data) {
@@ -1713,19 +1816,31 @@ function getApplicationStatusBadgeClass($status)
 
             const alreadyCommittedElsewhere = <?php echo $committedApplicationId ? 'true' : 'false'; ?>;
             const modalStatus = data.status_raw;
-            const canCommit = data.can_commit && (modalStatus === 'accepted' || modalStatus === 'committed');
+            const isThisApplicationCommitted = data.is_already_committed || false;
+            
+            const canCommit = (modalStatus === 'accepted' && !alreadyCommittedElsewhere) || isThisApplicationCommitted;
 
-            commitButton.disabled = !canCommit;
+            commitButton.disabled = !canCommit || isThisApplicationCommitted;
             commitButton.innerHTML = modalStatus === 'committed'
                 ? '<i class="fa-solid fa-circle-check"></i> Committed'
                 : '<i class="fa-solid fa-circle-check"></i> Commit';
 
-            if (modalStatus === 'accepted' && alreadyCommittedElsewhere && !data.can_commit) {
-                commitButton.title = 'You have already committed to another job.';
-            } else if (modalStatus !== 'accepted' && modalStatus !== 'committed') {
+            if (modalStatus === 'committed') {
+                commitButton.title = 'You have already committed to this job.';
+                commitButton.style.cursor = 'not-allowed';
+                commitButton.style.opacity = '0.6';
+            } else if (modalStatus === 'accepted' && alreadyCommittedElsewhere) {
+                commitButton.title = 'You have already committed to another job and cannot commit to additional positions.';
+                commitButton.style.cursor = 'not-allowed';
+                commitButton.style.opacity = '0.6';
+            } else if (modalStatus !== 'accepted') {
                 commitButton.title = 'Only accepted applications can be committed.';
+                commitButton.style.cursor = 'not-allowed';
+                commitButton.style.opacity = '0.6';
             } else {
-                commitButton.title = '';
+                commitButton.title = 'Click to commit to this internship position';
+                commitButton.style.cursor = 'pointer';
+                commitButton.style.opacity = '1';
             }
 
             modal.style.display = 'flex';
@@ -1746,6 +1861,7 @@ function getApplicationStatusBadgeClass($status)
         document.addEventListener('keydown', function (event) {
             if (event.key === 'Escape') {
                 closeApplicationModal();
+                closePasswordModal();
                 if (sidebar.classList.contains('open')) {
                     closeSidebar();
                 }

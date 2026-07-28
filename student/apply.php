@@ -12,19 +12,43 @@ $username = $_SESSION['username'] ?? 'Student';
 $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Student';
 $studentId = getUserId();
 
-$committedStmt = $pdo->prepare('SELECT id FROM job_applications WHERE student_id = ? AND status = "committed" LIMIT 1');
-$committedStmt->execute([$studentId]);
-$hasCommittedJob = (bool)$committedStmt->fetch();
+// Get user role for display
+try {
+    $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+    $stmt->execute([$studentId]);
+    $role = $stmt->fetchColumn() ?: 'student';
+} catch (PDOException $e) {
+    $role = 'student';
+}
+
+// ===== PROFILE PICTURE SETTINGS =====
+$avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
+$avatarPublicPath = '../assets/uploads/avatars/';
+
+function getUserProfilePicture($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT profile_picture FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        return $stmt->fetchColumn() ?: null;
+    } catch (PDOException $e) {
+        return null;
+    }
+}
+
+// Check if student has committed to a job - use helper function
+$committedJob = getStudentCommittedJob($pdo, $studentId);
+$hasCommittedJob = (bool)$committedJob;
+
+// If student has committed to a job, redirect them with message
+if ($hasCommittedJob) {
+    $_SESSION['info'] = 'You have already committed to "' . $committedJob['job_title'] . '" at ' . $committedJob['company_name'] . '. You cannot apply to other positions while committed.';
+    header('Location: applications.php');
+    exit;
+}
 
 // Handle Job Application Submission (POST)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'apply_job') {
     $jobId = (int)($_POST['job_id'] ?? 0);
-
-    if ($hasCommittedJob) {
-        $_SESSION['error'] = 'You have already committed to a job and can no longer apply to other internships.';
-        header('Location: apply.php');
-        exit;
-    }
 
     // 1. Check if already applied
     $checkStmt = $pdo->prepare('SELECT id FROM job_applications WHERE job_id = ? AND student_id = ?');
@@ -123,6 +147,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $uploadedFiles['resume'],
                 $uploadedFiles['app_letter']
             ]);
+
+            $supervisorId = findSupervisorForJob($pdo, $jobId);
+            if ($supervisorId) {
+                createSystemNotification(
+                    $pdo,
+                    $supervisorId,
+                    $studentId,
+                    'application',
+                    'New Job Application',
+                    'A student applied for the job "' . $jobObj['title'] . '".',
+                    'applicant.php'
+                );
+            }
+
             $_SESSION['success'] = 'Application for "' . htmlspecialchars($jobObj['title']) . '" submitted successfully!';
         } catch (Exception $e) {
             // Clean up files
@@ -135,6 +173,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     header('Location: apply.php');
     exit;
+}
+
+// Handle AJAX requests for password change and avatar update
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    // Change password
+    if ($_POST['action'] === 'change_password') {
+        $currentPassword = $_POST['current_password'] ?? '';
+        $newPassword = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
+
+        if (empty($currentPassword) || empty($newPassword) || empty($confirmPassword)) {
+            echo json_encode(['success' => false, 'message' => 'All fields are required.']);
+            exit;
+        }
+        if ($newPassword !== $confirmPassword) {
+            echo json_encode(['success' => false, 'message' => 'New password and confirmation do not match.']);
+            exit;
+        }
+        if (strlen($newPassword) < 8) {
+            echo json_encode(['success' => false, 'message' => 'New password must be at least 8 characters.']);
+            exit;
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT password FROM users WHERE id = ?");
+            $stmt->execute([$studentId]);
+            $hash = $stmt->fetchColumn();
+
+            if (!$hash || !password_verify($currentPassword, $hash)) {
+                echo json_encode(['success' => false, 'message' => 'Current password is incorrect.']);
+                exit;
+            }
+
+            $newHash = password_hash($newPassword, PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
+            $stmt->execute([$newHash, $studentId]);
+
+            echo json_encode(['success' => true, 'message' => 'Password updated successfully.']);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // Update profile picture
+    if ($_POST['action'] === 'update_avatar' && isset($_FILES['avatar'])) {
+        $file = $_FILES['avatar'];
+        $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+        $maxSize = 2 * 1024 * 1024; // 2MB
+
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            echo json_encode(['success' => false, 'message' => 'Upload failed. Please try again.']);
+            exit;
+        }
+        if (!in_array($file['type'], $allowedTypes)) {
+            echo json_encode(['success' => false, 'message' => 'Only JPG, PNG, WEBP or GIF images are allowed.']);
+            exit;
+        }
+        if ($file['size'] > $maxSize) {
+            echo json_encode(['success' => false, 'message' => 'Image must be smaller than 2MB.']);
+            exit;
+        }
+
+        if (!is_dir($avatarUploadDir)) {
+            @mkdir($avatarUploadDir, 0755, true);
+        }
+
+        $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $newFileName = 'user_' . $studentId . '_' . time() . '.' . strtolower($ext);
+        $destination = $avatarUploadDir . $newFileName;
+
+        if (move_uploaded_file($file['tmp_name'], $destination)) {
+            try {
+                $stmt = $pdo->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
+                $stmt->execute([$newFileName, $studentId]);
+
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'Profile picture updated.',
+                    'path' => $avatarPublicPath . $newFileName
+                ]);
+            } catch (PDOException $e) {
+                echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+            }
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Could not save the uploaded file.']);
+        }
+        exit;
+    }
 }
 
 // Fetch all jobs in system
@@ -166,6 +295,10 @@ $appliedJobs = [];
 foreach ($myApplications as $app) {
     $appliedJobs[$app['job_id']] = $app;
 }
+
+// Current profile picture
+$profilePicture = getUserProfilePicture($pdo, $studentId);
+$profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -174,9 +307,14 @@ foreach ($myApplications as $app) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Apply for Internship Roles</title>
     <link rel="stylesheet" href="../assets/styles.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <style>
-        /* ----- Reset / base overrides ----- */
+        /* ============================================================
+           Dark Green (#003300) & Golden Yellow (#FFCC33) theme
+           Sharp card edges, no rounded corners.
+           Header spans full width, flush with top.
+           ============================================================ */
         * {
             box-sizing: border-box;
             margin: 0;
@@ -184,8 +322,8 @@ foreach ($myApplications as $app) {
         }
 
         body {
-            background: #f1f5f9;
-            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f0f2f5;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0f172a;
         }
 
@@ -194,96 +332,169 @@ foreach ($myApplications as $app) {
             min-height: 100vh;
         }
 
-        /* ----- SIDEBAR ----- */
+        /* ---- Dark Green Sidebar (now a profile panel) ---- */
         .sidebar {
             width: 250px;
-            background: #0f172a;
+            background: #003300;
             color: #e2e8f0;
             display: flex;
             flex-direction: column;
             position: sticky;
             top: 0;
             height: 100vh;
-            padding: 24px 18px 20px;
+            padding: 28px 18px 20px;
             flex-shrink: 0;
+            border-right: 1px solid #1a4a1a;
+            align-items: center;
+            text-align: center;
         }
 
         .sidebar-brand {
             display: flex;
             align-items: center;
             gap: 10px;
-            margin-bottom: 32px;
+            margin-bottom: 28px;
+            padding: 0 6px;
         }
 
         .sidebar-brand i {
             font-size: 1.6rem;
-            color: #38bdf8;
+            color: #FFCC33;
         }
 
         .sidebar-brand h2 {
             font-size: 1.2rem;
             font-weight: 700;
             letter-spacing: -0.3px;
+            color: #FFCC33;
         }
 
         .sidebar-brand h2 span {
             display: block;
             font-weight: 400;
             font-size: 0.65rem;
-            color: #94a3b8;
+            color: #FFCC33;
+            opacity: 0.8;
             letter-spacing: 0.4px;
             text-transform: uppercase;
         }
 
-        .nav-section {
+        /* ---- Profile panel (sidebar) ---- */
+        .profile-panel {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-            flex: 1;
+            align-items: center;
+            width: 100%;
         }
 
-        .nav-item {
+        .avatar-editable {
+            position: relative;
+            width: 108px;
+            height: 108px;
+            margin-bottom: 16px;
+            cursor: pointer;
+        }
+
+        .avatar-editable .avatar-img,
+        .avatar-editable .avatar-initials {
+            width: 108px;
+            height: 108px;
+            border: 3px solid #FFCC33;
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 10px 14px;
-            border-radius: 12px;
+            justify-content: center;
+            overflow: hidden;
+            background: #FFCC33;
+            color: #003300;
+            font-weight: 700;
+            font-size: 2rem;
+            text-transform: uppercase;
+        }
+
+        .avatar-editable .avatar-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .avatar-editable .avatar-edit-badge {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            width: 32px;
+            height: 32px;
+            background: #003300;
+            border: 2px solid #FFCC33;
+            color: #FFCC33;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            transition: 0.15s;
+        }
+
+        .avatar-editable:hover .avatar-edit-badge {
+            background: #FFCC33;
+            color: #003300;
+        }
+
+        .avatar-editable input[type="file"] {
+            display: none;
+        }
+
+        .profile-panel .name {
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #FFCC33;
+            margin-bottom: 4px;
+            word-break: break-word;
+        }
+
+        .profile-panel .role-label {
+            font-size: 0.75rem;
             color: #cbd5e1;
-            text-decoration: none;
             font-weight: 500;
-            font-size: 0.95rem;
-            transition: all 0.15s;
+            text-transform: capitalize;
+            margin-bottom: 20px;
         }
 
-        .nav-item i {
-            width: 20px;
-            text-align: center;
-            font-size: 1rem;
+        .btn-change-password {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: rgba(255, 204, 51, 0.12);
+            border: 1px solid rgba(255, 204, 51, 0.35);
+            color: #FFCC33;
+            font-weight: 600;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
-        .nav-item:hover {
-            background: #1e293b;
-            color: #f1f5f9;
-        }
-
-        .nav-item.active {
-            background: #1e293b;
-            color: #38bdf8;
+        .btn-change-password:hover {
+            background: rgba(255, 204, 51, 0.25);
+            color: #fff;
         }
 
         .sidebar-footer {
             margin-top: auto;
-            border-top: 1px solid #1e293b;
+            border-top: 1px solid rgba(255, 204, 51, 0.3);
             padding-top: 18px;
+            width: 100%;
         }
 
         .logout-btn-side {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 10px;
             padding: 10px 14px;
-            border-radius: 12px;
-            color: #94a3b8;
+            border-radius: 0;
+            color: #cbd5e1;
             text-decoration: none;
             font-weight: 500;
             font-size: 0.9rem;
@@ -291,87 +502,147 @@ foreach ($myApplications as $app) {
         }
 
         .logout-btn-side:hover {
-            background: #1e293b;
-            color: #f1f5f9;
+            background: rgba(255, 204, 51, 0.2);
+            color: #fff;
         }
 
-        /* ----- MAIN CONTENT ----- */
+        /* ---- Main content ---- */
         .main-content {
             flex: 1;
             padding: 0 32px 32px 32px;
             display: flex;
             flex-direction: column;
+            gap: 24px;
         }
 
-        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-        /* ----- TOP HEADER (blue theme matching sidebar) ----- */
-.top-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 16px 32px;
-    background: #0f172a;
-    border-radius: 0;
-    margin: 0 -32px 24px -32px;
-    flex-wrap: wrap;
-    gap: 12px;
-
-    /* ADD THESE */
-    position: sticky;
-    top: 0;
-    z-index: 200;
-}
+        /* ---- Dark Green Top Header (full width, flush) ---- */
+        .top-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 32px;
+            background: #003300;
+            margin: 0 -32px 24px -32px;
+            flex-wrap: wrap;
+            gap: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+        }
 
         .header-left {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 28px;
+            flex-wrap: wrap;
         }
 
         .header-left h1 {
-            font-size: 1.4rem;
+            font-size: 1.25rem;
             font-weight: 700;
-            color: #f8fafc;
+            color: #FFCC33;
             letter-spacing: -0.3px;
+            white-space: nowrap;
         }
 
         .header-left h1 small {
             font-weight: 400;
             font-size: 0.85rem;
-            color: #94a3b8;
+            color: #FFCC33;
+            opacity: 0.8;
             margin-left: 8px;
         }
 
         .header-left h1 i {
-            color: #38bdf8;
+            color: #FFCC33;
             margin-right: 8px;
         }
 
+        .mobile-menu-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: #FFCC33;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+
+        /* ---- Header right with navigation ---- */
         .header-right {
             display: flex;
             align-items: center;
             gap: 20px;
+            flex: 1;
+            justify-content: flex-end;
         }
 
-        /* Notification bell */
+        .header-nav {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .header-nav .nav-item-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 16px;
+            border-radius: 0;
+            color: #cbd5e1;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.88rem;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .header-nav .nav-item-header i {
+            font-size: 0.9rem;
+        }
+
+        .header-nav .nav-item-header:hover {
+            background: rgba(255, 204, 51, 0.2);
+            color: #fff;
+        }
+
+        .header-nav .nav-item-header:hover i {
+            color: #FFCC33;
+        }
+
+        .header-nav .nav-item-header.active {
+            background: #FFCC33;
+            color: #003300;
+            font-weight: 600;
+        }
+
+        .header-nav .nav-item-header.active i {
+            color: #003300;
+        }
+
         .notif-bell {
             position: relative;
             font-size: 1.3rem;
-            color: #e2e8f0;
-            background: rgba(255,255,255,0.08);
+            color: #FFCC33;
+            background: rgba(255, 204, 51, 0.2);
             width: 44px;
             height: 44px;
-            border-radius: 50%;
+            border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
             transition: 0.15s;
             cursor: pointer;
             border: none;
+            flex-shrink: 0;
         }
 
         .notif-bell:hover {
-            background: rgba(255,255,255,0.18);
+            background: rgba(255, 204, 51, 0.4);
             color: #fff;
         }
 
@@ -385,554 +656,354 @@ foreach ($myApplications as $app) {
             font-weight: 700;
             width: 20px;
             height: 20px;
-            border-radius: 50%;
+            border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            border: 2px solid #0f172a;
+            border: 2px solid #003300;
         }
 
-        /* User profile chip */
-        .user-profile {
+        /* ---- Page card (sharp, bordered) ---- */
+        .page-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            padding: 24px 28px 32px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+            flex: 1;
+            border-radius: 0;
+        }
+
+        .page-card h2 {
+            font-size: 1.3rem;
             display: flex;
             align-items: center;
             gap: 10px;
-            background: rgba(255,255,255,0.08);
-            padding: 4px 16px 4px 6px;
-            border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.12);
-            cursor: default;
-            backdrop-filter: blur(2px);
+            color: #0f172a;
         }
 
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #3b82f6;
-            color: #fff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            font-size: 1rem;
-            text-transform: uppercase;
-            flex-shrink: 0;
+        .page-card h2 i {
+            color: #3b82f6;
         }
 
-        .user-info .name {
-            font-weight: 600;
+        .page-card .sub {
+            color: #64748b;
             font-size: 0.9rem;
-            color: #f1f5f9;
+            margin-top: 2px;
         }
 
-        .user-info .role-label {
-            font-size: 0.7rem;
-            color: #94a3b8;
-            font-weight: 500;
-            text-transform: capitalize;
-        }
-
-        /* ----- PAGE CARD ----- */
-        .page-card {
-            background: #fff;
-            border-radius: 24px;
-            padding: 24px 28px 32px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.02);
-            border: 1px solid #eef2f7;
-            flex: 1;
-        }
-
-        /* Modals and Overlays */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(15, 23, 42, 0.6);
-            backdrop-filter: blur(5px);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-            overflow-y: auto;
-        }
-        
-        .modal-container {
-            background: #ffffff;
-            width: 100%;
-            max-width: 680px;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            animation: modalSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-        
-        @keyframes modalSlideUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px) scale(0.97);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0) scale(1);
-            }
-        }
-        
-        .modal-header {
-            padding: 20px 24px;
-            border-bottom: 1px solid #f1f5f9;
+        .page-head {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            background: #fafcff;
-        }
-        
-        .modal-header h3 {
-            margin: 0;
-            font-size: 1.25rem;
-            color: #0f172a;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-weight: 700;
-        }
-        
-        .modal-close-btn {
-            background: #f1f5f9;
-            border: none;
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            font-size: 18px;
-            color: #64748b;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .modal-close-btn:hover {
-            background: #fee2e2;
-            color: #dc2626;
-            transform: rotate(90deg);
-        }
-        
-        .modal-body {
-            padding: 24px;
-            overflow-y: auto;
-            max-height: calc(85vh - 120px);
-        }
-        
-        .modal-footer {
-            padding: 16px 24px;
-            border-top: 1px solid #f1f5f9;
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            background: #fafcff;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 20px;
         }
 
-        /* Layout & Table styles */
+        /* ---- Search Row ---- */
+        .search-row {
+            margin-bottom: 20px;
+        }
+
+        .search-box {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 4px 16px;
+            max-width: 400px;
+            border-radius: 0;
+        }
+
+        .search-box i {
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+
+        .search-box input {
+            border: none;
+            background: transparent;
+            padding: 10px 0;
+            font-size: 0.9rem;
+            width: 100%;
+            outline: none;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .search-box input::placeholder {
+            color: #94a3b8;
+        }
+
+        /* ---- Table (sharp) ---- */
         .table-container {
             overflow-x: auto;
-            margin-top: 16px;
-            border-radius: 12px;
+            background: #fff;
             border: 1px solid #e2e8f0;
-            background: #ffffff;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
+            border-radius: 0;
         }
-        
+
         .job-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.9rem;
-            min-width: 900px;
         }
-        
-        .job-table thead {
+
+        .job-table th {
             background: #f8fafc;
-            border-bottom: 2px solid #e2e8f0;
-        }
-        
-        .job-table thead th {
-            padding: 12px 16px;
-            text-align: left;
-            font-weight: 600;
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #64748b;
-            white-space: nowrap;
-        }
-        
-        .job-table tbody tr {
-            border-bottom: 1px solid #f1f5f9;
-            transition: background 0.15s ease;
-        }
-        
-        .job-table tbody tr:hover {
-            background: #f8fafc;
-        }
-        
-        .job-table tbody td {
-            padding: 12px 16px;
-            vertical-align: middle;
             color: #1e293b;
-        }
-
-        /* Search and Filter Area */
-        .search-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            gap: 16px;
-            flex-wrap: wrap;
-        }
-
-        .search-box {
-            position: relative;
-            max-width: 380px;
-            width: 100%;
-        }
-
-        .search-box i {
-            position: absolute;
-            left: 14px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: #94a3b8;
-        }
-
-        .search-box input {
-            padding: 10px 14px 10px 38px;
-            border-radius: 10px;
-            border: 1px solid #cbd5e1;
-            font-size: 0.9rem;
-            background: #fff;
-            width: 100%;
-        }
-
-        /* Buttons & Badges */
-        .btn-view, .btn-apply {
-            padding: 6px 12px;
-            border-radius: 8px;
-            font-size: 0.8rem;
             font-weight: 600;
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .job-table td {
+            padding: 14px 16px;
+            border-bottom: 1px solid #f1f5f9;
+            vertical-align: middle;
+        }
+
+        .job-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .job-table tbody tr:hover {
+            background: #fafcff;
+        }
+
+        /* ---- Buttons ---- */
+        .btn-view {
+            padding: 6px 16px;
+            border-radius: 0;
+            font-size: 0.75rem;
+            font-weight: 500;
             cursor: pointer;
-            transition: all 0.15s ease;
+            transition: all 0.15s;
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            border: none;
-        }
-        
-        .btn-view {
-            background: #e0e7ff;
-            color: #4338ca;
-        }
-        
-        .btn-view:hover {
-            background: #c7d2fe;
-            transform: translateY(-1px);
-        }
-        
-        .btn-apply {
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
             background: #dbeafe;
             color: #1d4ed8;
+            border-color: #93c5fd;
         }
-        
-        .btn-apply:hover {
+
+        .btn-view:hover {
             background: #bfdbfe;
-            transform: translateY(-1px);
+            transform: scale(1.02);
         }
 
-        .btn-apply:disabled, .btn-view:disabled {
-            opacity: 0.65;
-            cursor: not-allowed;
-            transform: none !important;
-        }
-
-        .badge-status {
+        .btn-apply {
+            padding: 6px 16px;
+            border-radius: 0;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 4px 10px;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            font-weight: 600;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
+            background: #dcfce7;
+            color: #166534;
+            border-color: #86efac;
         }
 
-        .badge-pending { background: #fef3c7; color: #d97706; }
-        .badge-reviewed { background: #e0f2fe; color: #0369a1; }
-        .badge-shortlisted { background: #ece9ff; color: #6d28d9; }
-        .badge-accepted { background: #d1fae5; color: #065f46; }
-        .badge-rejected { background: #fee2e2; color: #991b1b; }
-        .badge-withdrawn { background: #f1f5f9; color: #475569; }
-
-        .btn-sec-outline {
-            padding: 10px 16px;
-            border-radius: 10px;
-            border: 1.5px solid #e2e8f0;
-            background: #ffffff;
-            color: #475569;
-            font-weight: 600;
-            font-size: 0.85rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
+        .btn-apply:hover:not(:disabled) {
+            background: #bbf7d0;
+            transform: scale(1.02);
         }
 
-        .btn-sec-outline:hover {
-            background: #f8fafc;
-            border-color: #cbd5e1;
+        .btn-apply:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         .btn-prim-blue {
-            padding: 10px 20px;
-            border-radius: 10px;
-            background: #2563eb;
-            color: #ffffff;
+            background: #0f172a;
+            border: 1px solid #0f172a;
+            color: #fff;
+            padding: 10px 28px;
+            border-radius: 0;
             font-weight: 600;
             font-size: 0.85rem;
-            border: none;
             cursor: pointer;
-            transition: all 0.2s ease;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             display: inline-flex;
             align-items: center;
             gap: 8px;
         }
 
-        .btn-prim-blue:hover {
-            background: #1d4ed8;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+        .btn-prim-blue:hover:not(:disabled) {
+            background: #1e293b;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
         }
 
-        /* Detail Modal Cards */
-        .details-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-            margin-bottom: 20px;
+        .btn-prim-blue:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
-        .detail-card {
-            background: #f8fafc;
-            padding: 14px 18px;
-            border-radius: 12px;
+        .btn-sec-outline {
+            background: #f1f5f9;
             border: 1px solid #e2e8f0;
-        }
-
-        .detail-card .lbl {
-            font-size: 0.72rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-weight: 700;
-            color: #64748b;
-            margin-bottom: 4px;
-        }
-
-        .detail-card .val {
-            font-size: 0.95rem;
+            color: #1e293b;
+            padding: 10px 24px;
+            border-radius: 0;
             font-weight: 600;
-            color: #0f172a;
-        }
-
-        .content-section {
-            margin-bottom: 16px;
-        }
-
-        .content-section h4 {
-            font-size: 0.82rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #475569;
-            margin: 16px 0 6px 0;
-            font-weight: 700;
-        }
-
-        .content-body {
-            background: #f8fafc;
-            padding: 14px 18px;
-            border-radius: 12px;
-            border: 1px solid #e2e8f0;
-            font-size: 0.9rem;
-            line-height: 1.6;
-            color: #334155;
-            white-space: pre-line;
-        }
-
-        /* File Upload Inputs styled */
-        .file-upload-block {
-            margin-bottom: 16px;
-            background: #f8fafc;
-            border: 2px dashed #cbd5e1;
-            padding: 16px;
-            border-radius: 12px;
-            transition: all 0.2s ease;
-        }
-
-        .file-upload-block:hover {
-            border-color: #2563eb;
-            background: #f0f6ff;
-        }
-
-        .file-upload-block label {
-            display: block;
             font-size: 0.85rem;
-            font-weight: 700;
-            color: #334155;
-            margin-bottom: 6px;
-        }
-
-        .file-upload-block span.hint {
-            display: block;
-            font-size: 0.72rem;
-            color: #64748b;
-            margin-bottom: 10px;
-        }
-
-        .file-upload-block input[type="file"] {
-            width: 100%;
-            font-size: 0.85rem;
-            color: #475569;
             cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
-        .file-upload-block input[type="file"]::file-selector-button {
-            border: none;
-            background: #2563eb;
-            color: white;
-            padding: 6px 12px;
-            border-radius: 6px;
+        .btn-sec-outline:hover {
+            background: #e9edf4;
+        }
+
+        /* ---- Status Badges ---- */
+        .badge-status {
+            padding: 4px 14px;
+            border-radius: 0;
             font-size: 0.75rem;
             font-weight: 600;
-            cursor: pointer;
-            margin-right: 12px;
-            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            border: 1px solid transparent;
         }
 
-        .file-upload-block input[type="file"]::file-selector-button:hover {
-            background: #1d4ed8;
+        .badge-pending {
+            background: #fef9c3;
+            color: #854d0e;
+            border-color: #facc15;
         }
 
-        /* Document Tag / Action Details */
+        .badge-reviewed {
+            background: #dbeafe;
+            color: #1d4ed8;
+            border-color: #93c5fd;
+        }
+
+        .badge-shortlisted {
+            background: #f1f5f9;
+            color: #475569;
+            border-color: #cbd5e1;
+        }
+
+        .badge-accepted {
+            background: #dcfce7;
+            color: #166534;
+            border-color: #86efac;
+        }
+
+        .badge-committed {
+            background: #dcfce7;
+            color: #166534;
+            border-color: #86efac;
+        }
+
+        .badge-rejected {
+            background: #fee2e2;
+            color: #991b1b;
+            border-color: #fca5a5;
+        }
+
+        .badge-withdrawn {
+            background: #e2e8f0;
+            color: #1e293b;
+            border-color: #94a3b8;
+        }
+
+        /* ---- Document Links ---- */
         .doc-link {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 6px;
+            gap: 4px;
+            padding: 4px 12px;
             background: #f1f5f9;
-            color: #334155;
+            border: 1px solid #e2e8f0;
             font-size: 0.75rem;
-            font-weight: 600;
-            transition: all 0.155s ease;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-            text-decoration: none;
+            font-weight: 500;
+            color: #2563eb;
             cursor: pointer;
+            transition: 0.15s;
+            border-radius: 0;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
         }
 
         .doc-link:hover {
-            background: #e2e8f0;
-            color: #1e293b;
+            background: #dbeafe;
+            border-color: #93c5fd;
         }
 
-        .doc-link i {
-            color: #2563eb;
-        }
-
+        /* ---- Empty State ---- */
         .empty-state {
-            padding: 48px 16px;
             text-align: center;
-            background: #f8fafc;
-            border: 2px dashed #cbd5e1;
-            border-radius: 16px;
+            padding: 60px 20px;
+            color: #94a3b8;
         }
 
         .empty-state i {
-            font-size: 40px;
-            color: #94a3b8;
-            margin-bottom: 12px;
-            opacity: 0.55;
+            font-size: 3rem;
+            display: block;
+            margin-bottom: 16px;
+            color: #cbd5e1;
         }
 
         .empty-state h3 {
-            margin: 0 0 6px;
-            font-size: 1.1rem;
             color: #1e293b;
+            margin-bottom: 8px;
         }
 
         .empty-state p {
-            margin: 0;
-            font-size: 0.85rem;
-            color: #64748b;
+            font-size: 0.95rem;
         }
 
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-group label {
-            font-weight: 700;
-            color: #475569;
-            font-size: 0.85rem;
-            display: block;
-            margin-bottom: 4px;
-        }
-
-        .form-control {
-            width: 100%;
-            padding: 10px 14px;
-            border-radius: 10px;
-            border: 1px solid #cbd5e1;
-            font-size: 0.9rem;
-            background: #f1f5f9;
-            font-weight: 600;
-            color: #0f172a;
-        }
-
-        .form-control:focus {
-            outline: none;
-            border-color: #2563eb;
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-        }
-
-        /* ===== TOAST ===== */
-        .toast {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            background: #0f172a;
-            color: #f1f5f9;
-            padding: 16px 24px;
-            border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        /* ===== MODAL STYLES (sharp) ===== */
+        .modal-overlay {
             display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.5);
+            backdrop-filter: blur(4px);
             align-items: center;
-            gap: 12px;
-            z-index: 2000;
-            font-weight: 500;
-            max-width: 400px;
-            animation: slideUp 0.3s ease;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
         }
 
-        .toast.success {
-            background: #059669;
-        }
-
-        .toast.error {
-            background: #dc2626;
-        }
-
-        .toast.show {
+        .modal-overlay.active {
             display: flex;
         }
 
-        .toast i {
-            font-size: 1.2rem;
+        .modal-container {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            max-width: 640px;
+            width: 100%;
+            padding: 32px 30px 28px;
+            box-shadow: 0 40px 60px -20px rgba(0,0,0,0.3);
+            animation: slideUp 0.25s ease;
+            max-height: 90vh;
+            overflow-y: auto;
+            border-radius: 0;
+        }
+
+        #passwordModal .modal-container {
+            max-width: 480px;
         }
 
         @keyframes slideUp {
@@ -946,16 +1017,223 @@ foreach ($myApplications as $app) {
             }
         }
 
-        /* ===== PDF VIEWER MODAL ===== */
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #edf2f7;
+        }
+
+        .modal-header h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #0f172a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .modal-header h3 i {
+            color: #2563eb;
+        }
+
+        .modal-close-btn {
+            background: none;
+            border: none;
+            font-size: 1.8rem;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0 8px;
+            transition: 0.15s;
+            line-height: 1;
+        }
+
+        .modal-close-btn:hover {
+            color: #1e293b;
+        }
+
+        .modal-body {
+            padding: 0;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 24px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 22px;
+        }
+
+        /* ---- Details Grid ---- */
+        .details-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        @media (max-width: 500px) {
+            .details-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .detail-card {
+            background: #f8fafc;
+            padding: 12px 16px;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+        }
+
+        .detail-card .lbl {
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #64748b;
+            margin-bottom: 4px;
+        }
+
+        .detail-card .val {
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 0.9rem;
+        }
+
+        .content-section {
+            margin-top: 16px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 16px;
+        }
+
+        .content-section h4 {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .content-section h4 i {
+            color: #64748b;
+        }
+
+        .content-body {
+            background: #f8fafc;
+            padding: 14px 18px;
+            font-size: 0.9rem;
+            line-height: 1.7;
+            color: #1e293b;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        /* ---- Form Styles ---- */
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #1e293b;
+            margin-bottom: 5px;
+        }
+
+        .form-group label i {
+            margin-right: 6px;
+            color: #64748b;
+        }
+
+        .form-group .form-control {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #d1d9e6;
+            border-radius: 0;
+            font-size: 0.95rem;
+            background: #fafcff;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .form-group .form-control:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        .form-group .form-control[readonly] {
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .file-upload-block {
+            margin-bottom: 20px;
+        }
+
+        .file-upload-block label {
+            display: block;
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #1e293b;
+            margin-bottom: 4px;
+        }
+
+        .file-upload-block .hint {
+            display: block;
+            font-size: 0.75rem;
+            color: #94a3b8;
+            margin-bottom: 6px;
+        }
+
+        .file-upload-block input[type="file"] {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #d1d9e6;
+            border-radius: 0;
+            font-size: 0.9rem;
+            background: #fafcff;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .file-upload-block input[type="file"]:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 24px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 22px;
+        }
+
+        /* ---- PDF Viewer ---- */
         .pdf-viewer-overlay {
             display: none;
             position: fixed;
-            inset: 0;
-            background: rgba(15, 23, 42, 0.85);
-            backdrop-filter: blur(8px);
-            z-index: 3000;
-            justify-content: center;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(4px);
             align-items: center;
+            justify-content: center;
+            z-index: 2000;
             padding: 20px;
         }
 
@@ -964,31 +1242,29 @@ foreach ($myApplications as $app) {
         }
 
         .pdf-viewer-container {
-            background: #ffffff;
-            width: 100%;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            width: 90%;
             max-width: 900px;
-            height: 90vh;
-            border-radius: 20px;
-            box-shadow: 0 40px 80px rgba(0, 0, 0, 0.3);
+            max-height: 90vh;
             display: flex;
             flex-direction: column;
-            animation: modalSlideUp 0.3s ease;
-            overflow: hidden;
+            box-shadow: 0 40px 60px -20px rgba(0,0,0,0.3);
+            animation: slideUp 0.25s ease;
+            border-radius: 0;
         }
 
         .pdf-viewer-header {
-            padding: 16px 24px;
-            border-bottom: 1px solid #e2e8f0;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: #fafcff;
-            flex-shrink: 0;
+            padding: 16px 24px;
+            border-bottom: 1px solid #edf2f7;
         }
 
         .pdf-viewer-header h3 {
-            margin: 0;
             font-size: 1.1rem;
+            font-weight: 600;
             color: #0f172a;
             display: flex;
             align-items: center;
@@ -1000,146 +1276,344 @@ foreach ($myApplications as $app) {
         }
 
         .pdf-viewer-close {
-            background: #f1f5f9;
+            background: none;
             border: none;
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            font-size: 20px;
-            color: #64748b;
+            font-size: 1.8rem;
+            color: #94a3b8;
             cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            padding: 0 8px;
+            transition: 0.15s;
+            line-height: 1;
         }
 
         .pdf-viewer-close:hover {
-            background: #fee2e2;
-            color: #dc2626;
+            color: #1e293b;
         }
 
         .pdf-viewer-body {
             flex: 1;
             padding: 16px;
-            overflow: hidden;
-            background: #f1f5f9;
+            min-height: 500px;
+            background: #f8fafc;
         }
 
         .pdf-viewer-body iframe {
             width: 100%;
             height: 100%;
-            border: none;
-            border-radius: 12px;
-            background: #ffffff;
+            min-height: 500px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
         }
 
         .pdf-viewer-footer {
-            padding: 12px 24px;
-            border-top: 1px solid #e2e8f0;
             display: flex;
             justify-content: flex-end;
-            background: #fafcff;
-            flex-shrink: 0;
+            padding: 16px 24px;
+            border-top: 1px solid #edf2f7;
+            gap: 12px;
         }
 
         .btn-download {
+            background: #0f172a;
+            border: 1px solid #0f172a;
+            color: #fff;
             padding: 8px 20px;
-            border-radius: 10px;
-            background: #2563eb;
-            color: #ffffff;
+            border-radius: 0;
             font-weight: 600;
-            font-size: 0.85rem;
-            border: none;
+            font-size: 0.82rem;
             cursor: pointer;
-            transition: all 0.2s ease;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             display: inline-flex;
             align-items: center;
             gap: 8px;
         }
 
         .btn-download:hover {
-            background: #1d4ed8;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+            background: #1e293b;
         }
 
-        @media (max-width: 720px) {
-            .details-grid {
-                grid-template-columns: 1fr;
+        /* ---- Toast ---- */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 16px 24px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 2000;
+            font-weight: 500;
+            max-width: 400px;
+            animation: slideUp 0.3s ease;
+            border: 1px solid #334155;
+            border-radius: 0;
+        }
+
+        .toast.success {
+            background: #059669;
+            border-color: #047857;
+        }
+
+        .toast.error {
+            background: #dc2626;
+            border-color: #b91c1c;
+        }
+
+        .toast.warning {
+            background: #d97706;
+            border-color: #b45309;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast i {
+            font-size: 1.2rem;
+        }
+
+        /* ---- Sidebar Overlay ---- */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+        }
+
+        .sidebar-overlay.show {
+            display: block;
+        }
+
+        /* ---- Responsive ---- */
+        @media (max-width: 1024px) {
+            .page-head {
+                flex-direction: column;
             }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                top: 0;
+                left: -280px;
+                width: 280px;
+                height: 100vh;
+                z-index: 1001;
+                transition: left 0.3s ease;
+                overflow-y: auto;
+            }
+
+            .sidebar.open {
+                left: 0;
+            }
+
+            .mobile-menu-toggle {
+                display: block;
+            }
+
             .top-header {
                 flex-direction: column;
                 align-items: stretch;
                 padding: 12px 16px;
                 margin: 0 -16px 16px -16px;
             }
+
+            .header-left {
+                flex-direction: row;
+                align-items: center;
+                gap: 12px;
+                justify-content: space-between;
+                width: 100%;
+            }
+
+            .header-left h1 {
+                font-size: 1.1rem;
+            }
+
             .header-right {
-                justify-content: flex-start;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+                justify-content: center;
+                width: 100%;
             }
-            .toast {
-                bottom: 20px;
-                right: 20px;
-                left: 20px;
-                padding: 14px 18px;
-                font-size: 0.9rem;
-                max-width: none;
+
+            .header-nav {
+                width: 100%;
+                justify-content: center;
+                flex-wrap: wrap;
             }
-            .pdf-viewer-container {
-                height: 95vh;
-                max-height: 600px;
+
+            .header-nav .nav-item-header {
+                padding: 6px 12px;
+                font-size: 0.8rem;
             }
-            .pdf-viewer-header h3 {
-                font-size: 0.95rem;
+
+            .notif-bell {
+                align-self: center;
+            }
+
+            .page-card {
+                padding: 16px;
+            }
+
+            .job-table th,
+            .job-table td {
+                padding: 10px 12px;
+                font-size: 0.8rem;
+            }
+
+            .modal-container {
+                padding: 24px 18px;
+                max-height: 95vh;
+                margin: 10px;
+            }
+
+            .btn-view,
+            .btn-apply {
+                font-size: 0.65rem;
+                padding: 4px 10px;
+            }
+
+            .details-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .pdf-viewer-body {
+                min-height: 300px;
+            }
+
+            .pdf-viewer-body iframe {
+                min-height: 300px;
+            }
+
+            .search-box {
+                max-width: 100%;
             }
         }
 
         @media (max-width: 480px) {
-            .toast {
-                bottom: 12px;
-                right: 12px;
-                left: 12px;
-                padding: 12px 16px;
-                font-size: 0.85rem;
-                border-radius: 12px;
+            .header-nav .nav-item-header {
+                font-size: 0.7rem;
+                padding: 4px 8px;
             }
+
+            .header-nav .nav-item-header i {
+                font-size: 0.7rem;
+            }
+
+            .job-table th,
+            .job-table td {
+                padding: 8px 6px;
+                font-size: 0.7rem;
+            }
+
+            .btn-view,
+            .btn-apply {
+                font-size: 0.6rem;
+                padding: 3px 6px;
+            }
+
+            .badge-status {
+                font-size: 0.65rem;
+                padding: 2px 8px;
+            }
+
+            .doc-link {
+                font-size: 0.65rem;
+                padding: 2px 8px;
+            }
+
+            .modal-footer {
+                flex-direction: column;
+            }
+
+            .modal-footer .btn-prim-blue,
+            .modal-footer .btn-sec-outline {
+                width: 100%;
+                justify-content: center;
+            }
+
             .pdf-viewer-container {
-                height: 95vh;
-                max-height: 500px;
-                border-radius: 12px;
+                width: 95%;
             }
-            .pdf-viewer-header {
-                padding: 12px 16px;
-            }
+
             .pdf-viewer-body {
+                min-height: 200px;
                 padding: 8px;
+            }
+
+            .pdf-viewer-body iframe {
+                min-height: 200px;
             }
         }
     </style>
 </head>
 <body>
     <div class="app-shell">
-        <!-- Sidebar Navigation -->
-        <aside class="sidebar">
+        <!-- Sidebar Overlay for mobile -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- SIDEBAR: user profile panel -->
+        <aside class="sidebar" id="sidebar">
             <div class="sidebar-brand">
                 <i class="fa-solid fa-graduation-cap"></i>
-                <h2>RBAC<span>Student Portal</span></h2>
+                <h2>Role Based<span>Student Portal</span></h2>
             </div>
-            <nav class="nav-section">
-                <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item active" href="apply.php"><i class="fa-solid fa-briefcase"></i> Apply Job</a>
-                <a class="nav-item" href="applications.php"><i class="fa-solid fa-file-lines"></i> My Applications</a>
-                <a class="nav-item" href="dpr.php"><i class="fa-regular fa-calendar-check"></i> Daily Progress Report</a>
-            </nav>
+
+            <div class="profile-panel">
+                <div class="avatar-editable" id="avatarEditable" title="Click to change your photo">
+                    <?php if (!empty($profilePictureUrl)): ?>
+                        <div class="avatar-img" id="avatarImgWrap">
+                            <img src="<?php echo htmlspecialchars($profilePictureUrl); ?>" alt="Profile photo" id="avatarImg" />
+                        </div>
+                    <?php else: ?>
+                        <div class="avatar-initials" id="avatarImgWrap">
+                            <?php
+                            $initials = '';
+                            $parts = explode(' ', trim($fullname));
+                            if (count($parts) >= 2) {
+                                $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
+                            } else {
+                                $initials = strtoupper(substr($fullname, 0, 2));
+                            }
+                            echo htmlspecialchars($initials);
+                            ?>
+                        </div>
+                    <?php endif; ?>
+                    <div class="avatar-edit-badge"><i class="fa-solid fa-camera"></i></div>
+                    <input type="file" id="avatarInput" accept="image/png, image/jpeg, image/webp, image/gif" />
+                </div>
+
+                <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
+                <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
+
+                <button class="btn-change-password" id="openPasswordModalBtn">
+                    <i class="fa-solid fa-key"></i> Change Password
+                </button>
+            </div>
+
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
             </div>
         </aside>
 
-        <!-- Main Workspace -->
+        <!-- MAIN CONTENT -->
         <main class="main-content">
-            <!-- TOP HEADER -->
+            <!-- HEADER: full width, dark green, flush with top -->
             <div class="top-header">
                 <div class="header-left">
+                    <button class="mobile-menu-toggle" id="menuToggle" aria-label="Toggle menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
                     <h1>
                         <i class="fa-solid fa-briefcase"></i>
                         Internship Opportunities
@@ -1147,39 +1621,34 @@ foreach ($myApplications as $app) {
                     </h1>
                 </div>
                 <div class="header-right">
+                    <!-- Header Navigation -->
+                    <nav class="header-nav">
+                        <a class="nav-item-header" href="dashboard.php"></i> Dashboard</a>
+                        <?php if (!$hasCommittedJob): ?>
+                            <a class="nav-item-header active" href="apply.php"></i> Apply Job</a>
+                        <?php endif; ?>
+                        <a class="nav-item-header" href="applications.php"></i> My Applications</a>
+                        <?php if ($hasCommittedJob): ?>
+                            <a class="nav-item-header" href="dpr.php"></i> Daily Progress Report</a>
+                        <?php endif; ?>
+                    </nav>
+
+                    <!-- Notification bell -->
                     <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
                         <i class="fa-regular fa-bell"></i>
                         <span class="notif-badge">3</span>
                     </button>
-                    <div class="user-profile">
-                        <div class="user-avatar">
-                            <?php
-                                $initials = '';
-                                $parts = explode(' ', trim($fullname));
-                                if (count($parts) >= 2) {
-                                    $initials = strtoupper(substr($parts[0], 0, 1) . substr($parts[1], 0, 1));
-                                } else {
-                                    $initials = strtoupper(substr($fullname, 0, 2));
-                                }
-                                echo htmlspecialchars($initials);
-                            ?>
-                        </div>
-                        <div class="user-info">
-                            <div class="name"><?php echo htmlspecialchars($fullname); ?></div>
-                            <div class="role-label">Student</div>
-                        </div>
-                    </div>
                 </div>
             </div>
 
             <!-- Available Jobs Card -->
             <div class="page-card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
+                <div class="page-head">
                     <div>
-                        <h2 style="margin: 0; font-size: 1.3rem;">Available Positions</h2>
-                        <p style="margin: 4px 0 0; font-size: 0.85rem; color:#64748b;">Explore and apply for internship opportunities created by supervisors.</p>
+                        <h2><i class="fa-regular fa-briefcase"></i> Available Positions</h2>
+                        <p class="sub">Explore and apply for internship opportunities created by supervisors.</p>
                     </div>
-                    <div style="font-size: 0.85rem; font-weight: 600; color: #475569;">
+                    <div style="font-size: 0.85rem; font-weight: 600; color: #475569; padding: 8px 16px; background: #f8fafc; border: 1px solid #e2e8f0;">
                         Total Positions: <span style="color:#2563eb; font-weight: 700;"><?php echo count($jobs); ?></span>
                     </div>
                 </div>
@@ -1226,7 +1695,7 @@ foreach ($myApplications as $app) {
                                         </td>
                                         <td><?php echo htmlspecialchars($job['company_name']); ?></td>
                                         <td>
-                                            <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border-radius:999px; font-weight: 600; color:#475569;">
+                                            <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border:1px solid #e2e8f0; font-weight: 600; color:#475569;">
                                                 <?php echo htmlspecialchars($job['industry']); ?>
                                             </span>
                                         </td>
@@ -1257,15 +1726,15 @@ foreach ($myApplications as $app) {
                                                 </button>
                                                 
                                                 <?php if ($hasCommittedJob): ?>
-                                                    <button class="btn-apply" style="background:#e2e8f0; color:#64748b;" disabled title="You have already committed to a job">
+                                                    <button class="btn-apply" style="background:#e2e8f0; color:#64748b; border-color:#cbd5e1;" disabled title="You have already committed to a job">
                                                         <i class="fa-solid fa-lock"></i> 
                                                     </button>
                                                 <?php elseif ($hasApplied): ?>
-                                                    <button class="btn-apply" style="background:#f1f5f9; color:#94a3b8;" disabled>
+                                                    <button class="btn-apply" style="background:#f1f5f9; color:#94a3b8; border-color:#e2e8f0;" disabled>
                                                         <i class="fa-solid fa-check"></i> Applied
                                                     </button>
                                                 <?php elseif ($slotsLeft <= 0): ?>
-                                                    <button class="btn-apply" style="background:#fee2e2; color:#ef4444;" disabled title="Job is filled">
+                                                    <button class="btn-apply" style="background:#fee2e2; color:#ef4444; border-color:#fca5a5;" disabled title="Job is filled">
                                                         <i class="fa-solid fa-ban"></i> Filled
                                                     </button>
                                                 <?php else: ?>
@@ -1281,7 +1750,7 @@ foreach ($myApplications as $app) {
                         </table>
                     </div>
                 <?php else: ?>
-                    <div class="empty-state" style="margin-top: 16px;">
+                    <div class="empty-state">
                         <i class="fa-solid fa-briefcase"></i>
                         <h3>No Positions Posted Yet</h3>
                         <p>Supervisors haven't posted any internship opportunities yet. Please check back later.</p>
@@ -1291,10 +1760,12 @@ foreach ($myApplications as $app) {
 
             <!-- Student Applications History Section -->
             <?php if (count($myApplications) > 0): ?>
-                <div class="page-card" style="margin-top: 24px;">
-                    <div style="margin-bottom: 12px;">
-                        <h2 style="margin: 0; font-size: 1.3rem;">Your Submitted Applications</h2>
-                        <p style="margin: 4px 0 0; font-size: 0.85rem; color:#64748b;">Keep track of internship applications you've submitted and check their current status.</p>
+                <div class="page-card">
+                    <div class="page-head">
+                        <div>
+                            <h2><i class="fa-regular fa-file-lines"></i> Your Submitted Applications</h2>
+                            <p class="sub">Keep track of internship applications you've submitted and check their current status.</p>
+                        </div>
                     </div>
 
                     <div class="table-container">
@@ -1392,17 +1863,17 @@ foreach ($myApplications as $app) {
                 </div>
 
                 <div class="content-section">
-                    <h4>Description</h4>
+                    <h4><i class="fa-regular fa-align-left"></i> Description</h4>
                     <div id="v_description" class="content-body">No description entered.</div>
                 </div>
 
                 <div class="content-section">
-                    <h4>Responsibilities</h4>
+                    <h4><i class="fa-regular fa-list-check"></i> Responsibilities</h4>
                     <div id="v_responsibility" class="content-body">No responsibilities entered.</div>
                 </div>
 
                 <div class="content-section">
-                    <h4>Requirements</h4>
+                    <h4><i class="fa-regular fa-circle-check"></i> Requirements</h4>
                     <div id="v_requirements" class="content-body">No requirements entered.</div>
                 </div>
             </div>
@@ -1426,7 +1897,7 @@ foreach ($myApplications as $app) {
 
                 <div class="modal-body">
                     <div class="form-group">
-                        <label>Applying to Position:</label>
+                        <label><i class="fa-regular fa-briefcase"></i> Applying to Position:</label>
                         <input type="text" id="apply_job_title_display" class="form-control" readonly>
                     </div>
 
@@ -1462,7 +1933,38 @@ foreach ($myApplications as $app) {
         </div>
     </div>
 
-    <!-- ===== PDF VIEWER MODAL ===== -->
+    <!-- CHANGE PASSWORD MODAL -->
+    <div class="modal-overlay" id="passwordModal">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-key"></i> Change Password</h3>
+                <button type="button" class="modal-close-btn" id="closePasswordBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="color: #64748b; margin-bottom: 20px;">Enter your current password and choose a new one.</p>
+                <form id="passwordForm">
+                    <div class="form-group">
+                        <label for="currentPassword"><i class="fa-solid fa-lock"></i> Current Password</label>
+                        <input type="password" id="currentPassword" autocomplete="current-password" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="newPassword"><i class="fa-solid fa-lock"></i> New Password</label>
+                        <input type="password" id="newPassword" autocomplete="new-password" minlength="8" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="confirmPassword"><i class="fa-solid fa-lock"></i> Confirm New Password</label>
+                        <input type="password" id="confirmPassword" autocomplete="new-password" minlength="8" required />
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn-sec-outline" id="closePasswordBtn2">Cancel</button>
+                        <button type="submit" class="btn-prim-blue"><i class="fa-solid fa-check"></i> Update Password</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF VIEWER MODAL -->
     <div class="pdf-viewer-overlay" id="pdfViewer">
         <div class="pdf-viewer-container">
             <div class="pdf-viewer-header">
@@ -1480,18 +1982,215 @@ foreach ($myApplications as $app) {
         </div>
     </div>
 
-    <!-- ===== TOAST ===== -->
+    <!-- TOAST -->
     <div class="toast" id="toast">
         <i class="fa-regular fa-circle-check"></i>
         <span id="toastMessage">Success!</span>
     </div>
 
-    <!-- JavaScript Handling -->
     <script>
         // Inject jobs JSON so we don't do unnecessary AJAX calls
         const jobsList = <?php echo json_encode($jobs); ?>;
         let currentPdfPath = '';
         let currentPdfName = '';
+
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        <?php if (isset($_SESSION['success'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['success']); ?>', 'success');
+            });
+            <?php unset($_SESSION['success']); ?>
+        <?php endif; ?>
+
+        <?php if (isset($_SESSION['error'])): ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($_SESSION['error']); ?>', 'error');
+            });
+            <?php unset($_SESSION['error']); ?>
+        <?php endif; ?>
+
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
+
+        // ===== MOBILE MENU TOGGLE =====
+        const sidebar = document.getElementById('sidebar');
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+        function toggleSidebar() {
+            sidebar.classList.toggle('open');
+            sidebarOverlay.classList.toggle('show');
+            document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
+        }
+
+        function closeSidebar() {
+            sidebar.classList.remove('open');
+            sidebarOverlay.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+
+        if (menuToggle) {
+            menuToggle.addEventListener('click', toggleSidebar);
+        }
+
+        if (sidebarOverlay) {
+            sidebarOverlay.addEventListener('click', closeSidebar);
+        }
+
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+
+        // ===== PASSWORD MODAL =====
+        const passwordModal = document.getElementById('passwordModal');
+        const openPasswordBtn = document.getElementById('openPasswordModalBtn');
+        const closePasswordBtn = document.getElementById('closePasswordBtn');
+        const closePasswordBtn2 = document.getElementById('closePasswordBtn2');
+        const passwordForm = document.getElementById('passwordForm');
+
+        if (openPasswordBtn) {
+            openPasswordBtn.addEventListener('click', function() {
+                if (passwordModal) {
+                    passwordModal.style.display = 'flex';
+                    document.body.style.overflow = 'hidden';
+                    if (passwordForm) passwordForm.reset();
+                }
+            });
+        }
+
+        function closePasswordModal() {
+            if (passwordModal) {
+                passwordModal.style.display = 'none';
+                document.body.style.overflow = '';
+            }
+        }
+
+        if (closePasswordBtn) closePasswordBtn.addEventListener('click', closePasswordModal);
+        if (closePasswordBtn2) closePasswordBtn2.addEventListener('click', closePasswordModal);
+        if (passwordModal) {
+            passwordModal.addEventListener('click', function(e) {
+                if (e.target === passwordModal) closePasswordModal();
+            });
+        }
+
+        if (passwordForm) {
+            passwordForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                var currentPassword = document.getElementById('currentPassword').value;
+                var newPassword = document.getElementById('newPassword').value;
+                var confirmPassword = document.getElementById('confirmPassword').value;
+
+                if (newPassword !== confirmPassword) {
+                    showToast('New password and confirmation do not match.', 'error');
+                    return;
+                }
+                if (newPassword.length < 8) {
+                    showToast('New password must be at least 8 characters.', 'error');
+                    return;
+                }
+
+                var submitBtn = passwordForm.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Updating...';
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'change_password');
+                formData.append('current_password', currentPassword);
+                formData.append('new_password', newPassword);
+                formData.append('confirm_password', confirmPassword);
+
+                fetch(window.location.href, { method: 'POST', body: formData })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showToast(data.message || 'Password updated successfully.', 'success');
+                            closePasswordModal();
+                        } else {
+                            showToast(data.message || 'Failed to update password.', 'error');
+                        }
+                    })
+                    .catch(function() {
+                        showToast('An error occurred. Please try again.', 'error');
+                    })
+                    .finally(function() {
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = '<i class="fa-solid fa-check"></i> Update Password';
+                        }
+                    });
+            });
+        }
+
+        // ===== AVATAR UPLOAD =====
+        var avatarEditable = document.getElementById('avatarEditable');
+        var avatarInput = document.getElementById('avatarInput');
+        var avatarImgWrap = document.getElementById('avatarImgWrap');
+
+        if (avatarEditable && avatarInput) {
+            avatarEditable.addEventListener('click', function() {
+                avatarInput.click();
+            });
+
+            avatarInput.addEventListener('change', function() {
+                var file = avatarInput.files[0];
+                if (!file) return;
+
+                if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+                    showToast('Only JPG, PNG, WEBP or GIF images are allowed.', 'error');
+                    return;
+                }
+                if (file.size > 2 * 1024 * 1024) {
+                    showToast('Image must be smaller than 2MB.', 'error');
+                    return;
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'update_avatar');
+                formData.append('avatar', file);
+
+                fetch(window.location.href, { method: 'POST', body: formData })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showToast('Profile picture updated.', 'success');
+                            if (avatarImgWrap && data.path) {
+                                avatarImgWrap.className = 'avatar-img';
+                                avatarImgWrap.innerHTML = '<img src="' + data.path + '?t=' + Date.now() + '" alt="Profile photo" id="avatarImg" />';
+                            }
+                        } else {
+                            showToast(data.message || 'Failed to update profile picture.', 'error');
+                        }
+                    })
+                    .catch(function() {
+                        showToast('An error occurred while uploading. Please try again.', 'error');
+                    });
+            });
+        }
 
         // ===== PDF VIEWER =====
         function viewPDF(filePath, fileName) {
@@ -1534,49 +2233,7 @@ foreach ($myApplications as $app) {
             }
         });
 
-        // Close PDF viewer on Escape key
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                if (document.getElementById('pdfViewer').classList.contains('active')) {
-                    closePDFViewer();
-                }
-            }
-        });
-
-        // ===== TOAST =====
-        function showToast(message, type = 'success') {
-            const toast = document.getElementById('toast');
-            const toastMessage = document.getElementById('toastMessage');
-            
-            toast.className = 'toast ' + type + ' show';
-            toastMessage.textContent = message;
-            
-            clearTimeout(toast._timeout);
-            toast._timeout = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 4000);
-        }
-
-        // Check for session messages and show as toast
-        <?php if (isset($_SESSION['success'])): ?>
-            document.addEventListener('DOMContentLoaded', function() {
-                showToast('<?php echo htmlspecialchars($_SESSION['success']); ?>', 'success');
-            });
-            <?php unset($_SESSION['success']); ?>
-        <?php endif; ?>
-
-        <?php if (isset($_SESSION['error'])): ?>
-            document.addEventListener('DOMContentLoaded', function() {
-                showToast('<?php echo htmlspecialchars($_SESSION['error']); ?>', 'error');
-            });
-            <?php unset($_SESSION['error']); ?>
-        <?php endif; ?>
-
-        // Toast click to dismiss
-        document.getElementById('toast').addEventListener('click', function() {
-            this.classList.remove('show');
-        });
-
+        // ===== MODAL FUNCTIONS =====
         function openViewModal(jobId) {
             const job = jobsList.find(j => parseInt(j.id) === parseInt(jobId));
             if (!job) return;
@@ -1598,10 +2255,12 @@ foreach ($myApplications as $app) {
             document.getElementById('v_requirements').innerText = job.requirements || 'No requirements entered.';
 
             document.getElementById('viewModal').style.display = 'flex';
+            document.body.style.overflow = 'hidden';
         }
 
         function closeViewModal() {
             document.getElementById('viewModal').style.display = 'none';
+            document.body.style.overflow = '';
         }
 
         function openApplyModal(jobId, jobTitle) {
@@ -1611,10 +2270,12 @@ foreach ($myApplications as $app) {
             document.getElementById('apply_job_id').value = jobId;
             document.getElementById('apply_job_title_display').value = jobTitle;
             document.getElementById('applyModal').style.display = 'flex';
+            document.body.style.overflow = 'hidden';
         }
 
         function closeApplyModal() {
             document.getElementById('applyModal').style.display = 'none';
+            document.body.style.overflow = '';
             // Clear file inputs on close
             document.getElementById('cv_file').value = '';
             document.getElementById('resume_file').value = '';
@@ -1632,6 +2293,25 @@ foreach ($myApplications as $app) {
                 closeApplyModal();
             }
         };
+
+        // Escape key to close modals
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                if (document.getElementById('viewModal').style.display === 'flex') {
+                    closeViewModal();
+                }
+                if (document.getElementById('applyModal').style.display === 'flex') {
+                    closeApplyModal();
+                }
+                if (document.getElementById('pdfViewer').classList.contains('active')) {
+                    closePDFViewer();
+                }
+                closePasswordModal();
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            }
+        });
 
         // Table Instant Search Filtering logic
         function filterJobsTable() {
