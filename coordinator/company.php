@@ -1,8 +1,9 @@
 <?php
-// coordinator/dashboard.php
+// coordinator/company.php (Coordinator Company Management with Pagination)
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/coordinator_notifications.php';
 
 // Check if user is coordinator
 checkAccess('coordinator');
@@ -10,6 +11,15 @@ checkAccess('coordinator');
 $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Coordinator';
 $role = getUserRole();
 $userId = getUserId();
+
+// ===== DEFINE SEARCH AND PAGE EARLY =====
+$search = trim($_GET['search'] ?? '');
+$currentPage = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+
+// Initialize notifications
+checkAndCreateCoordinatorNotifications($pdo, $userId);
+$unreadCount = getCoordinatorUnreadNotificationCount($pdo, $userId);
+$notificationsList = getCoordinatorNotifications($pdo, $userId, 10, 0);
 
 // ===== PROFILE PICTURE SETTINGS =====
 $avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
@@ -28,6 +38,38 @@ function getUserProfilePicture($pdo, $user_id) {
 // Handle AJAX requests for password change and avatar update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+    
+    // Handle notification actions first
+    if (in_array($_POST['action'], ['get_notifications', 'mark_read', 'mark_all_read'])) {
+        $action = $_POST['action'];
+        
+        if ($action === 'get_notifications') {
+            $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+            $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+            $notifs = getCoordinatorNotifications($pdo, $userId, $limit, $offset);
+            $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+            echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $count]);
+            exit;
+        }
+        
+        if ($action === 'mark_read') {
+            $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+            if ($notification_id > 0) {
+                $result = markCoordinatorNotificationRead($pdo, $notification_id, $userId);
+                $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+                echo json_encode(['success' => $result, 'unread_count' => $count]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
+            }
+            exit;
+        }
+        
+        if ($action === 'mark_all_read') {
+            $result = markCoordinatorAllNotificationsRead($pdo, $userId);
+            echo json_encode(['success' => $result, 'unread_count' => 0]);
+            exit;
+        }
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {
@@ -116,7 +158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 
-// Handle form actions
+// Handle form actions (add, edit, assign)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'add_company') {
         $company_name = trim($_POST['company_name']);
@@ -157,7 +199,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $_SESSION['error'] = 'Invalid company selected.';
             } else {
                 if ($supervisorId > 0) {
-                    $supStmt = $pdo->prepare("SELECT * FROM users WHERE id = ? AND role = 'supervisor'");
+                    $supStmt = $pdo->prepare("SELECT * FROM users WHERE id = ? AND role = 'supervisor' AND status = 'active'");
                     $supStmt->execute([$supervisorId]);
                     $supervisor = $supStmt->fetch();
 
@@ -200,12 +242,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if ($searchQuery !== '') {
             $redirectUrl .= '?search=' . urlencode($searchQuery);
         }
+        // Preserve pagination page
+        $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+        $redirectUrl .= (strpos($redirectUrl, '?') === false ? '?' : '&') . 'page=' . $page;
         header("Location: $redirectUrl");
         exit;
     }
 
+    // For add and edit, redirect with search and page preserved
     if ($_POST['action'] !== 'assign_supervisor') {
-        header("Location: company.php");
+        $redirectUrl = 'company.php?page=' . $currentPage;
+        if (!empty($search)) {
+            $redirectUrl .= '&search=' . urlencode($search);
+        }
+        header("Location: $redirectUrl");
         exit;
     }
 }
@@ -216,7 +266,12 @@ if (isset($_GET['delete'])) {
     $stmt = $pdo->prepare("DELETE FROM companies WHERE id = ?");
     $stmt->execute([$id]);
     $_SESSION['success'] = "Company deleted successfully!";
-    header("Location: company.php");
+    
+    $redirectUrl = 'company.php?page=' . $currentPage;
+    if (!empty($search)) {
+        $redirectUrl .= '&search=' . urlencode($search);
+    }
+    header("Location: $redirectUrl");
     exit;
 }
 
@@ -231,7 +286,27 @@ if (isset($_GET['get_company'])) {
     exit;
 }
 
-$search = trim($_GET['search'] ?? '');
+// ===== PAGINATION SETUP =====
+$limit = 10;
+$offset = ($currentPage - 1) * $limit;
+
+// Get total count of companies (with search filter)
+$countSql = "SELECT COUNT(*) AS total FROM companies";
+$countParams = [];
+if ($search !== '') {
+    $countSql .= " WHERE company_name LIKE ?";
+    $countParams[] = '%' . $search . '%';
+}
+$countStmt = $pdo->prepare($countSql);
+$countStmt->execute($countParams);
+$totalCompanies = (int)$countStmt->fetchColumn();
+$totalPages = ceil($totalCompanies / $limit);
+
+// Ensure current page is within bounds
+if ($currentPage > $totalPages && $totalPages > 0) {
+    $currentPage = $totalPages;
+    $offset = ($currentPage - 1) * $limit;
+}
 
 // Fetch supervisor list for assignment
 $supervisors = $pdo->prepare("SELECT id, firstname, middlename, lastname, suffix FROM users WHERE role = 'supervisor' AND status = 'active' ORDER BY firstname, lastname");
@@ -250,21 +325,31 @@ while ($row = $assignmentsStmt->fetch()) {
     $assignedSupervisors[(int)$row['supervisor_id']] = (int)$row['id'];
 }
 
-// Fetch companies with optional search filter
+// Fetch companies with pagination and search filter
 $companySql = "SELECT * FROM companies";
 $params = [];
 if ($search !== '') {
     $companySql .= " WHERE company_name LIKE ?";
     $params[] = '%' . $search . '%';
 }
-$companySql .= " ORDER BY created_at DESC";
+$companySql .= " ORDER BY created_at DESC LIMIT ? OFFSET ?";
 $stmt = $pdo->prepare($companySql);
-$stmt->execute($params);
+// Bind all parameters – the first are strings (if search exists), the last two are integers
+$paramIndex = 1;
+foreach ($params as $p) {
+    $stmt->bindValue($paramIndex++, $p, PDO::PARAM_STR);
+}
+$stmt->bindValue($paramIndex++, $limit, PDO::PARAM_INT);
+$stmt->bindValue($paramIndex++, $offset, PDO::PARAM_INT);
+$stmt->execute();
 $companies = $stmt->fetchAll();
 
 // Current profile picture
 $profilePicture = getUserProfilePicture($pdo, $userId);
 $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
+
+// The rest of the HTML remains exactly the same except the search and page hidden inputs
+// are already correctly set.
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -636,6 +721,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
             flex: 1;
             border-radius: 0;
+            display: flex;
+            flex-direction: column;
         }
 
         .page-card-header {
@@ -739,6 +826,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         .table-wrapper {
             overflow-x: auto;
             padding: 4px 8px 8px 8px;
+            min-height: 320px;
+            flex: 1;
         }
 
         .company-table {
@@ -757,6 +846,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             font-size: 0.68rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
+            white-space: nowrap;
         }
 
         .company-table td {
@@ -905,6 +995,57 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .empty-state p {
             font-size: 0.9rem;
+        }
+
+        /* ===== PAGINATION (bottom right) ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding: 16px 8px 20px 8px;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: 12px;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
         }
 
         /* ===== MODAL STYLES (sharp) ===== */
@@ -1235,6 +1376,53 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             display: block;
         }
 
+        /* ===== GO TO PAGE FEATURE ===== */
+        .page-jump {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: 8px;
+        }
+
+        .page-jump span {
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-right: 2px;
+        }
+
+        .page-jump input {
+            width: 50px;
+            padding: 4px 6px;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+            font-size: 0.75rem;
+            text-align: center;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .page-jump input:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        .page-jump button {
+            padding: 4px 10px;
+            border: 1px solid #e2e8f0;
+            background: #f1f5f9;
+            color: #1e293b;
+            font-size: 0.7rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border-radius: 0;
+        }
+
+        .page-jump button:hover {
+            background: #e2e8f0;
+        }
+
         /* ---- Responsive ---- */
         @media (max-width: 1024px) {
             .page-card-header {
@@ -1258,6 +1446,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
             .form-row .form-group {
                 margin-bottom: 14px;
+            }
+            .company-table th:nth-child(5),
+            .company-table td:nth-child(5) {
+                display: none;
             }
         }
 
@@ -1333,6 +1525,13 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 font-size: 0.72rem;
             }
 
+            .company-table th:nth-child(4),
+            .company-table td:nth-child(4),
+            .company-table th:nth-child(5),
+            .company-table td:nth-child(5) {
+                display: none;
+            }
+
             .modal-container {
                 max-height: 95vh;
                 margin: 10px;
@@ -1388,6 +1587,20 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 font-size: 0.65rem;
                 padding: 2px 6px;
             }
+
+            .pagination-wrapper {
+                flex-direction: column;
+                align-items: center;
+                gap: 10px;
+            }
+
+            .pagination-wrapper .page-info {
+                margin-right: 0;
+            }
+
+            .page-jump {
+                margin-left: 0;
+            }
         }
 
         @media (max-width: 480px) {
@@ -1434,6 +1647,11 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
             .modal-header h2 {
                 font-size: 1rem;
+            }
+
+            .company-table th:nth-child(3),
+            .company-table td:nth-child(3) {
+                display: none;
             }
         }
 
@@ -1552,18 +1770,18 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <div class="header-right">
                     <!-- Header Navigation -->
                     <nav class="header-nav">
-                        <a class="nav-item-header" href="dashboard.php"></i> Dashboard</a>
-                        <a class="nav-item-header active" href="company.php"></i> Companies</a>
-                        <a class="nav-item-header" href="intern.php"></i> Internship</a>
-                        <a class="nav-item-header" href="evaluation.php"></i> Evaluation</a>
-                        <a class="nav-item-header" href="dss.php"></i> Decision Support</a>
+                        <a class="nav-item-header" href="dashboard.php">Dashboard</a>
+                        <a class="nav-item-header active" href="company.php"> Companies</a>
+                        <a class="nav-item-header" href="intern.php"> Internship</a>
+                        <a class="nav-item-header" href="evaluation.php">Evaluation</a>
+                        <a class="nav-item-header" href="dss.php"> Decision Support</a>
                     </nav>
 
                     <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
+                     <?php 
+                    require_once __DIR__ . '/notification_component.php';
+                    renderNotificationBell($unreadCount, $notificationsList);
+                    ?>
                 </div>
             </div>
 
@@ -1577,6 +1795,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     <div class="page-card-actions">
                         <form action="company.php" method="get" class="search-form">
                             <input type="search" name="search" placeholder="Search company name..." value="<?php echo htmlspecialchars($search); ?>" aria-label="Search companies" />
+                            <input type="hidden" name="page" value="1" />
                             <button type="submit" class="btn-search"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
                         </form>
                         <button onclick="openAddModal()" class="btn-add">
@@ -1626,7 +1845,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                                 <button type="button" onclick="openEditModal(<?php echo $company['id']; ?>)" class="btn-edit" title="Edit">
                                                     <i class="fa-solid fa-edit"></i>
                                                 </button>
-                                                <a href="?delete=<?php echo $company['id']; ?>" class="btn-delete" onclick="return confirm('Delete this company?')" title="Delete">
+                                                <a href="?delete=<?php echo $company['id']; ?>&page=<?php echo $currentPage; ?><?php echo !empty($search) ? '&search=' . urlencode($search) : ''; ?>" class="btn-delete" onclick="return confirm('Delete this company?')" title="Delete">
                                                     <i class="fa-solid fa-trash-alt"></i>
                                                 </a>
                                             </div>
@@ -1638,8 +1857,69 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     <?php else: ?>
                         <div class="empty-state">
                             <i class="fa-solid fa-building-circle-exclamation"></i>
-                            <p>No companies added yet. Click "Add" to get started.</p>
+                            <p><?php echo !empty($search) ? 'No companies found matching "' . htmlspecialchars($search) . '".' : 'No companies added yet. Click "Add" to get started.'; ?></p>
                         </div>
+                    <?php endif; ?>
+                </div>
+
+                <!-- ===== PAGINATION (always visible) ===== -->
+                <div class="pagination-wrapper">
+                    <span class="page-info">
+                        <?php if ($totalCompanies > 0): ?>
+                            Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $limit, $totalCompanies); ?> of <?php echo $totalCompanies; ?>
+                        <?php else: ?>
+                            No companies to display
+                        <?php endif; ?>
+                    </span>
+                    <?php
+                    // Build base URL with search
+                    $baseUrl = 'company.php';
+                    $params = [];
+                    if (!empty($search)) {
+                        $params[] = 'search=' . urlencode($search);
+                    }
+                    $queryString = !empty($params) ? '?' . implode('&', $params) . '&' : '?';
+                    
+                    // Previous link
+                    if ($currentPage > 1) {
+                        echo '<a href="' . $baseUrl . $queryString . 'page=' . ($currentPage - 1) . '" class="page-link">Prev</a>';
+                    } else {
+                        echo '<span class="page-link disabled">Prev</span>';
+                    }
+
+                    // Page numbers (if there are pages)
+                    if ($totalPages > 0) {
+                        $start = max(1, $currentPage - 2);
+                        $end = min($totalPages, $currentPage + 2);
+                        if ($start > 1) {
+                            echo '<a href="' . $baseUrl . $queryString . 'page=1" class="page-link">1</a>';
+                            if ($start > 2) echo '<span class="page-link disabled">…</span>';
+                        }
+                        for ($i = $start; $i <= $end; $i++) {
+                            $active = ($i == $currentPage) ? 'active' : '';
+                            echo '<a href="' . $baseUrl . $queryString . 'page=' . $i . '" class="page-link ' . $active . '">' . $i . '</a>';
+                        }
+                        if ($end < $totalPages) {
+                            if ($end < $totalPages - 1) echo '<span class="page-link disabled">…</span>';
+                            echo '<a href="' . $baseUrl . $queryString . 'page=' . $totalPages . '" class="page-link">' . $totalPages . '</a>';
+                        }
+                    }
+
+                    // Next link
+                    if ($currentPage < $totalPages) {
+                        echo '<a href="' . $baseUrl . $queryString . 'page=' . ($currentPage + 1) . '" class="page-link">Next</a>';
+                    } else {
+                        echo '<span class="page-link disabled">Next</span>';
+                    }
+                    ?>
+                    
+                    <!-- Go to Page Feature -->
+                    <?php if ($totalPages > 1): ?>
+                    <div class="page-jump">
+                        <span>Go to</span>
+                        <input type="number" id="pageJumpInput" min="1" max="<?php echo $totalPages; ?>" value="<?php echo $currentPage; ?>" />
+                        <button onclick="jumpToPage()">Go</button>
+                    </div>
                     <?php endif; ?>
                 </div>
             </div>
@@ -1768,6 +2048,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <input type="hidden" name="action" value="assign_supervisor" />
                 <input type="hidden" name="company_id" id="assign_company_id" value="" />
                 <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>" />
+                <input type="hidden" name="page" value="<?php echo $currentPage; ?>" />
                 
                 <div class="search-box">
                     <input id="assignSupervisorSearch" type="search" placeholder="Search supervisors by name..." aria-label="Search supervisors" />
@@ -1875,6 +2156,33 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         // Toast click to dismiss
         document.getElementById('toast').addEventListener('click', function() {
             this.classList.remove('show');
+        });
+
+        // ===== GO TO PAGE =====
+        function jumpToPage() {
+            const input = document.getElementById('pageJumpInput');
+            const page = parseInt(input.value);
+            const maxPages = parseInt(input.getAttribute('max'));
+            
+            if (page && page >= 1 && page <= maxPages) {
+                const urlParams = new URLSearchParams(window.location.search);
+                urlParams.set('page', page);
+                window.location.href = window.location.pathname + '?' + urlParams.toString();
+            } else {
+                showToast('Please enter a valid page number (1-' + maxPages + ').', 'error');
+            }
+        }
+
+        // Allow Enter key on page jump input
+        document.addEventListener('DOMContentLoaded', function() {
+            const jumpInput = document.getElementById('pageJumpInput');
+            if (jumpInput) {
+                jumpInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        jumpToPage();
+                    }
+                });
+            }
         });
 
         // ===== MOBILE MENU TOGGLE =====
@@ -2194,5 +2502,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         });
     </script>
+
+    <?php renderNotificationScript(); ?>
 </body>
 </html>

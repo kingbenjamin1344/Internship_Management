@@ -200,7 +200,8 @@ function ensureNotificationTables($pdo) {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_notifications_user (user_id),
             INDEX idx_notifications_read (is_read),
-            INDEX idx_notifications_created (created_at)
+            INDEX idx_notifications_created (created_at),
+            INDEX idx_notifications_composite (user_id, sender_id, type, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 SQL
     );
@@ -212,6 +213,26 @@ function createSystemNotification($pdo, $user_id, $sender_id, $type, $title, $me
     }
 
     try {
+        // Check for duplicate notification within the last 5 minutes
+        // This prevents duplicate notifications from being created for the same event
+        $checkStmt = $pdo->prepare(
+            "SELECT id FROM notifications 
+             WHERE user_id = ? 
+             AND sender_id = ? 
+             AND type = ? 
+             AND title = ? 
+             AND message = ?
+             AND created_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+             LIMIT 1"
+        );
+        $checkStmt->execute([$user_id, $sender_id, $type, $title, $message]);
+        
+        // If a duplicate exists, don't create another one
+        if ($checkStmt->fetch()) {
+            return true; // Return true to indicate notification already exists
+        }
+
+        // No duplicate found, proceed with insertion
         $stmt = $pdo->prepare(
             "INSERT INTO notifications (user_id, sender_id, type, title, message, link, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, NOW())"
         );

@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/coordinator_notifications.php';
 
 // Check if user is coordinator
 checkAccess('coordinator');
@@ -10,6 +11,11 @@ checkAccess('coordinator');
 $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Coordinator';
 $role = getUserRole();
 $userId = getUserId();
+
+// Initialize notifications - check for new ones automatically
+checkAndCreateCoordinatorNotifications($pdo, $userId);
+$unreadCount = getCoordinatorUnreadNotificationCount($pdo, $userId);
+$notificationsList = getCoordinatorNotifications($pdo, $userId, 10, 0);
 
 // ===== PROFILE PICTURE SETTINGS =====
 $avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
@@ -28,6 +34,38 @@ function getUserProfilePicture($pdo, $user_id) {
 // Handle AJAX requests for password change and avatar update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+    
+    // Handle notification actions first
+    if (in_array($_POST['action'], ['get_notifications', 'mark_read', 'mark_all_read'])) {
+        $action = $_POST['action'];
+        
+        if ($action === 'get_notifications') {
+            $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+            $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+            $notifs = getCoordinatorNotifications($pdo, $userId, $limit, $offset);
+            $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+            echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $count]);
+            exit;
+        }
+        
+        if ($action === 'mark_read') {
+            $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+            if ($notification_id > 0) {
+                $result = markCoordinatorNotificationRead($pdo, $notification_id, $userId);
+                $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+                echo json_encode(['success' => $result, 'unread_count' => $count]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
+            }
+            exit;
+        }
+        
+        if ($action === 'mark_all_read') {
+            $result = markCoordinatorAllNotificationsRead($pdo, $userId);
+            echo json_encode(['success' => $result, 'unread_count' => 0]);
+            exit;
+        }
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {
@@ -115,6 +153,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 }
+
+// Handle AJAX requests for notifications
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+
+    if ($_POST['action'] === 'get_notifications') {
+        $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+        $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+        $notifications = getCoordinatorNotifications($pdo, $userId, $limit, $offset);
+        $unreadCount = getCoordinatorUnreadNotificationCount($pdo, $userId);
+        echo json_encode(['success' => true, 'notifications' => $notifications, 'unread_count' => $unreadCount]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'mark_read') {
+        $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+        if ($notification_id > 0) {
+            $result = markCoordinatorNotificationRead($pdo, $notification_id, $userId);
+            $unreadCount = getCoordinatorUnreadNotificationCount($pdo, $userId);
+            echo json_encode(['success' => $result, 'unread_count' => $unreadCount]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
+        }
+        exit;
+    }
+
+    if ($_POST['action'] === 'mark_all_read') {
+        $result = markCoordinatorAllNotificationsRead($pdo, $userId);
+        echo json_encode(['success' => $result, 'unread_count' => 0]);
+        exit;
+    }
+}
+
+// Initialize notifications
+$unreadCount = getCoordinatorUnreadNotificationCount($pdo, $userId);
+$notifications = getCoordinatorNotifications($pdo, $userId, 10, 0);
 
 // Get real statistics
 $stats = [
@@ -1109,11 +1183,11 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <a class="nav-item-header" href="dss.php"></i> Decision Support</a>
                     </nav>
 
-                    <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
+                    <!-- Notification bell with dropdown -->
+                    <?php 
+                    require_once __DIR__ . '/notification_component.php';
+                    renderNotificationBell($unreadCount, $notificationsList);
+                    ?>
                 </div>
             </div>
 
@@ -1402,14 +1476,21 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             });
         }
 
+        // ===== NOTIFICATION BELL =====
+        <?php renderNotificationScript(); ?>
+
         document.addEventListener('keydown', function(event) {
             if (event.key === 'Escape') {
                 closePasswordModal();
                 if (sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
+                if (notifDropdown && notifDropdown.classList.contains('open')) {
+                    notifDropdown.classList.remove('open');
+                }
             }
         });
+
     </script>
 </body>
 </html>

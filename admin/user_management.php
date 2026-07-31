@@ -116,38 +116,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 
-// Handle actions
+// Handle non-AJAX POST actions (update role, status, create user, delete user)
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action'])) {
         switch ($_POST['action']) {
             case 'update_role':
-                $userId = (int)$_POST['user_id'];
+                $targetUserId = (int)$_POST['user_id'];
                 $newRole = $_POST['role'];
-                if (updateUserRole($pdo, $userId, $newRole)) {
+                if (updateUserRole($pdo, $targetUserId, $newRole)) {
                     $_SESSION['message'] = 'User role updated successfully.';
                 }
                 break;
             case 'update_status':
-                $userId = (int)$_POST['user_id'];
+                $targetUserId = (int)$_POST['user_id'];
                 $newStatus = $_POST['status'];
-                if (updateUserStatus($pdo, $userId, $newStatus)) {
+                if (updateUserStatus($pdo, $targetUserId, $newStatus)) {
                     $_SESSION['message'] = 'User status updated successfully.';
                 }
                 break;
-            case 'approve_user':
-                $userId = (int)$_POST['user_id'];
-                if (approveUser($pdo, $userId)) {
-                    $_SESSION['message'] = 'User approved successfully.';
-                }
-                break;
-            case 'decline_user':
-                $userId = (int)$_POST['user_id'];
-                if (declineUser($pdo, $userId)) {
-                    $_SESSION['message'] = 'User declined and removed.';
+            case 'delete_user':
+                $targetUserId = (int)$_POST['user_id'];
+                // Prevent admin from deleting themselves
+                if ($targetUserId == $userId) {
+                    $_SESSION['message'] = 'Error: You cannot delete your own account.';
+                } else {
+                    try {
+                        $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
+                        if ($stmt->execute([$targetUserId])) {
+                            $_SESSION['message'] = 'User deleted successfully.';
+                        } else {
+                            $_SESSION['message'] = 'Failed to delete user.';
+                        }
+                    } catch (PDOException $e) {
+                        $_SESSION['message'] = 'Database error: ' . $e->getMessage();
+                    }
                 }
                 break;
             case 'update_profile':
-                $userId = (int)$_POST['user_id'];
+                $targetUserId = (int)$_POST['user_id'];
                 $data = [
                     'firstname' => sanitize($_POST['firstname']),
                     'middlename' => sanitize($_POST['middlename']),
@@ -157,7 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'address' => sanitize($_POST['address']),
                     'birthdate' => sanitize($_POST['birthdate'])
                 ];
-                if (updateUserProfile($pdo, $userId, $data)) {
+                if (updateUserProfile($pdo, $targetUserId, $data)) {
                     $_SESSION['message'] = 'User profile updated successfully.';
                 }
                 break;
@@ -210,19 +216,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     $_SESSION['message'] = 'Error: ' . implode('<br>', $errors);
                 }
-                redirect('user_management.php');
+                // Preserve current page after redirect
+                $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+                redirect('user_management.php?page=' . $page);
                 break;
         }
-        redirect('user_management.php');
+        // Preserve page for other actions as well
+        $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+        redirect('user_management.php?page=' . $page);
     }
 }
 
-// Get all users except unapproved pending accounts
-$stmt = $pdo->query("SELECT * FROM users WHERE id != " . getUserId() . " AND status != 'pending' ORDER BY created_at DESC");
-$users = $stmt->fetchAll();
+// ===== PAGINATION SETUP =====
+$currentPage = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($currentPage < 1) $currentPage = 1;
+$limit = 10; // items per page
+$offset = ($currentPage - 1) * $limit;
 
-// Get pending users
-$pendingUsers = getPendingUsers($pdo);
+// Get total count of users (excluding current user and pending)
+$countStmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id != ? AND status != 'pending'");
+$countStmt->execute([getUserId()]);
+$totalUsers = $countStmt->fetchColumn();
+$totalPages = ceil($totalUsers / $limit);
+
+// Fetch users for current page – BIND AS INTEGERS to avoid SQL error
+$stmt = $pdo->prepare("SELECT * FROM users WHERE id != ? AND status != 'pending' ORDER BY created_at DESC LIMIT ? OFFSET ?");
+$stmt->bindValue(1, getUserId(), PDO::PARAM_INT);
+$stmt->bindValue(2, $limit, PDO::PARAM_INT);
+$stmt->bindValue(3, $offset, PDO::PARAM_INT);
+$stmt->execute();
+$users = $stmt->fetchAll();
 
 // Get messages
 $message = $_SESSION['message'] ?? '';
@@ -606,6 +629,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             border: 1px solid #e2e8f0;
             box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
+            min-height: 320px; /* Added min-height */
         }
 
         .user-table {
@@ -765,6 +789,57 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .empty-state p {
             font-size: 0.85rem;
+        }
+
+        /* ===== PAGINATION (bottom right) ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: 12px;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
         }
 
         /* ===== MODAL STYLES (sharp) ===== */
@@ -1416,7 +1491,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             <nav class="nav-section">
                 <a class="nav-item " href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
                 <a class="nav-item active" href="user_management.php"><i class="fa-solid fa-users-gear"></i> User Management</a>
-                <a class="nav-item" href="pending.php"><i class="fa-solid fa-users-gear"></i> Pending</a>
+                <a class="nav-item" href="pending.php"><i class="fa-solid fa-clock-rotate-left"></i> Pending</a>
+                <a class="nav-item" href="company.php"><i class="fa-solid fa-building"></i> Company</a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
@@ -1471,7 +1547,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <!-- All Users Section -->
                 <div class="page-card">
                     <div class="section-header">
-                        <h2><i class="fa-regular fa-users"></i> All Users <span class="badge-count"><?php echo count($users); ?></span></h2>
+                        <h2><i class="fa-regular fa-users"></i> All Users <span class="badge-count"><?php echo $totalUsers; ?></span></h2>
                         <button class="btn-create" onclick="openModal()"><i class="fa-solid fa-plus"></i> Create User</button>
                     </div>
 
@@ -1535,61 +1611,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                                 </form>
                                             </td>
                                             <td>
-                                                <button onclick="openProfile('<?php echo rawurlencode(json_encode($user)); ?>')" class="btn-view"><i class="fa-solid fa-eye"></i></button>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- Pending Approvals Section -->
-                <div class="page-card pending-section">
-                    <div class="section-header">
-                        <h2><i class="fa-regular fa-clock"></i> Pending Approvals <span class="badge-count"><?php echo count($pendingUsers); ?></span></h2>
-                    </div>
-
-                    <div class="table-wrap">
-                        <table class="user-table">
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Name</th>
-                                    <th>Email</th>
-                                    <th>Phone</th>
-                                    <th>Registered</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php if (empty($pendingUsers)): ?>
-                                    <tr>
-                                        <td colspan="6" class="empty-state">
-                                            <i class="fa-regular fa-check-circle"></i>
-                                            <p>No pending registrations.</p>
-                                        </td>
-                                    </tr>
-                                <?php else: ?>
-                                    <?php foreach ($pendingUsers as $user): ?>
-                                        <tr>
-                                            <td><?php echo $user['id']; ?></td>
-                                            <td>
-                                                <div class="user-name"><?php echo htmlspecialchars(getFullName($user)); ?></div>
-                                                <div class="user-info">@<?php echo htmlspecialchars($user['username']); ?></div>
-                                            </td>
-                                            <td><?php echo htmlspecialchars($user['email']); ?></td>
-                                            <td><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></td>
-                                            <td><?php echo date('Y-m-d H:i', strtotime($user['created_at'])); ?></td>
-                                            <td>
                                                 <div class="actions-wrap">
-                                                    <form method="POST" class="inline-form">
+                                                    <button onclick="openProfile('<?php echo rawurlencode(json_encode($user)); ?>')" class="btn-view" title="View Profile"><i class="fa-solid fa-eye"></i></button>
+                                                    <form method="POST" class="inline-form" onsubmit="return confirmDelete(this, <?php echo $user['id']; ?>, '<?php echo addslashes(htmlspecialchars(getFullName($user))); ?>');">
                                                         <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
-                                                        <button type="submit" name="action" value="approve_user" class="btn-success"><i class="fa-solid fa-check"></i> Approve</button>
-                                                        <button type="submit" name="action" value="decline_user" class="btn-danger"><i class="fa-solid fa-xmark"></i> Decline</button>
+                                                        <button type="submit" name="action" value="delete_user" class="btn-danger" title="Delete User"><i class="fa-solid fa-trash-can"></i></button>
                                                     </form>
-                                                    <button onclick="openProfile('<?php echo rawurlencode(json_encode($user)); ?>')" class="btn-view"><i class="fa-solid fa-eye"></i></button>
                                                 </div>
                                             </td>
                                         </tr>
@@ -1597,6 +1624,50 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                 <?php endif; ?>
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- ===== PAGINATION (always visible) ===== -->
+                    <div class="pagination-wrapper">
+                        <span class="page-info">
+                            <?php if ($totalUsers > 0): ?>
+                                Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $limit, $totalUsers); ?> of <?php echo $totalUsers; ?>
+                            <?php else: ?>
+                                No users to display
+                            <?php endif; ?>
+                        </span>
+                        <?php
+                        // Previous link
+                        if ($currentPage > 1) {
+                            echo '<a href="?page=' . ($currentPage - 1) . '" class="page-link">Prev</a>';
+                        } else {
+                            echo '<span class="page-link disabled">Prev</span>';
+                        }
+
+                        // Page numbers (only if there are pages)
+                        if ($totalPages > 0) {
+                            $start = max(1, $currentPage - 2);
+                            $end = min($totalPages, $currentPage + 2);
+                            if ($start > 1) {
+                                echo '<a href="?page=1" class="page-link">1</a>';
+                                if ($start > 2) echo '<span class="page-link disabled">…</span>';
+                            }
+                            for ($i = $start; $i <= $end; $i++) {
+                                $active = ($i == $currentPage) ? 'active' : '';
+                                echo '<a href="?page=' . $i . '" class="page-link ' . $active . '">' . $i . '</a>';
+                            }
+                            if ($end < $totalPages) {
+                                if ($end < $totalPages - 1) echo '<span class="page-link disabled">…</span>';
+                                echo '<a href="?page=' . $totalPages . '" class="page-link">' . $totalPages . '</a>';
+                            }
+                        }
+
+                        // Next link
+                        if ($currentPage < $totalPages) {
+                            echo '<a href="?page=' . ($currentPage + 1) . '" class="page-link">Next</a>';
+                        } else {
+                            echo '<span class="page-link disabled">Next</span>';
+                        }
+                        ?>
                     </div>
                 </div>
             </div>
@@ -1994,6 +2065,14 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         }
                     });
             });
+        }
+
+        // ===== DELETE CONFIRMATION =====
+        function confirmDelete(form, userId, userName) {
+            if (!confirm('Are you sure you want to delete user "' + userName + '" (ID: ' + userId + ')? This action cannot be undone.')) {
+                return false;
+            }
+            return true;
         }
 
         // ===== AVATAR UPLOAD =====

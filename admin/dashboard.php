@@ -1022,9 +1022,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             </div>
             <nav class="nav-section">
                 <a class="nav-item active" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item" href="user_management.php"><i class="fa-solid fa-users-gear"></i> User Management</a>
-                <a class="nav-item" href="pending.php"><i class="fa-solid fa-users-gear"></i> Pending</a>
-            </nav>
+                <a class="nav-item " href="user_management.php"><i class="fa-solid fa-users-gear"></i> User Management</a>
+                <a class="nav-item" href="pending.php"><i class="fa-solid fa-clock-rotate-left"></i> Pending</a>
+                <a class="nav-item" href="company.php"><i class="fa-solid fa-building"></i> Company</a>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
             </div>

@@ -68,29 +68,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 if ($newStatus === 'accepted' && $oldStatus !== 'accepted') {
                     $pdo->prepare('UPDATE jobs SET slots_filled = slots_filled + 1 WHERE id = ?')->execute([$jobId]);
                     
+                    // Get job title for notification
+                    $jobStmt = $pdo->prepare('SELECT title FROM jobs WHERE id = ?');
+                    $jobStmt->execute([$jobId]);
+                    $jobTitle = $jobStmt->fetchColumn() ?: 'a position';
+                    
                     // Create notification for student when accepted
-                    $notifTitle = "Application Accepted";
-                    $notifMessage = "Congratulations! Your application for " . $appInfo['job_title'] . " has been accepted.";
-                    $notifLink = "../student/dashboard.php";
-                    $stmt = $pdo->prepare("
-                        INSERT INTO notifications (user_id, sender_id, type, title, message, link, created_at, is_read)
-                        VALUES (?, ?, 'application', ?, ?, ?, NOW(), 0)
-                    ");
-                    $stmt->execute([$studentId, $userId, $notifTitle, $notifMessage, $notifLink]);
+                    createSystemNotification(
+                        $pdo,
+                        $studentId,
+                        $userId,
+                        'application_accepted',
+                        'Application Accepted',
+                        'Congratulations! Your application for "' . $jobTitle . '" has been accepted by the supervisor.',
+                        'applications.php'
+                    );
+                    
+                } elseif ($newStatus === 'rejected' && $oldStatus !== 'rejected') {
+                    // Get job title for notification
+                    $jobStmt = $pdo->prepare('SELECT title FROM jobs WHERE id = ?');
+                    $jobStmt->execute([$jobId]);
+                    $jobTitle = $jobStmt->fetchColumn() ?: 'a position';
+                    
+                    // Create notification for student when rejected
+                    createSystemNotification(
+                        $pdo,
+                        $studentId,
+                        $userId,
+                        'application_rejected',
+                        'Application Update',
+                        'Your application for "' . $jobTitle . '" was not successful this time. Keep applying!',
+                        'applications.php'
+                    );
                     
                 } elseif ($oldStatus === 'accepted' && $newStatus !== 'accepted') {
                     $pdo->prepare('UPDATE jobs SET slots_filled = GREATEST(0, slots_filled - 1) WHERE id = ?')->execute([$jobId]);
                 }
-                
-                // Create notification for supervisor about status change
-                $notifTitle = "Application Status Updated";
-                $notifMessage = $studentName . " has been " . strtolower($newStatus) . " for " . $appInfo['job_title'];
-                $notifLink = "applicant.php";
-                $stmt = $pdo->prepare("
-                    INSERT INTO notifications (user_id, sender_id, type, title, message, link, created_at, is_read)
-                    VALUES (?, ?, 'application', ?, ?, ?, NOW(), 0)
-                ");
-                $stmt->execute([$userId, $userId, $notifTitle, $notifMessage, $notifLink]);
 
                 $pdo->commit();
                 
@@ -152,6 +165,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     // Manage vacancy counters: increment if accepted, decrement if changed from accepted
                     if ($newStatus === 'accepted' && $oldStatus !== 'accepted') {
                         $pdo->prepare('UPDATE jobs SET slots_filled = slots_filled + 1 WHERE id = ?')->execute([$jobId]);
+                        
+                        // Get job title for notification
+                        $jobStmt = $pdo->prepare('SELECT title FROM jobs WHERE id = ?');
+                        $jobStmt->execute([$jobId]);
+                        $jobTitle = $jobStmt->fetchColumn() ?: 'a position';
+                        
+                        // Create notification for student when accepted
+                        createSystemNotification(
+                            $pdo,
+                            $studentId,
+                            $userId,
+                            'application_accepted',
+                            'Application Accepted',
+                            'Congratulations! Your application for "' . $jobTitle . '" has been accepted by the supervisor.',
+                            'applications.php'
+                        );
+                        
+                    } elseif ($newStatus === 'rejected' && $oldStatus !== 'rejected') {
+                        // Get job title for notification
+                        $jobStmt = $pdo->prepare('SELECT title FROM jobs WHERE id = ?');
+                        $jobStmt->execute([$jobId]);
+                        $jobTitle = $jobStmt->fetchColumn() ?: 'a position';
+                        
+                        // Create notification for student when rejected
+                        createSystemNotification(
+                            $pdo,
+                            $studentId,
+                            $userId,
+                            'application_rejected',
+                            'Application Update',
+                            'Your application for "' . $jobTitle . '" was not successful this time. Keep applying!',
+                            'applications.php'
+                        );
+                        
                     } elseif ($oldStatus === 'accepted' && $newStatus !== 'accepted') {
                         $pdo->prepare('UPDATE jobs SET slots_filled = GREATEST(0, slots_filled - 1) WHERE id = ?')->execute([$jobId]);
                     }
@@ -1177,6 +1224,58 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             border-color: #cbd5e1;
         }
 
+        /* ===== PAGINATION (bottom right - edge of page) ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+            width: 100%;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: auto;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
         /* ===== MODAL STYLES (sharp) ===== */
         .modal-overlay {
             display: none;
@@ -1935,7 +2034,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 </div>
             </div>
 
-            <!-- Table Card -->
+            <!-- Table Card 1: Active Applicants -->
             <div class="page-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                     <div>
@@ -1943,7 +2042,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <p style="margin: 4px 0 0; font-size: 0.85rem; color:#64748b;">Review qualification documents and update statuses of student applicants.</p>
                     </div>
                     <div style="font-size: 0.85rem; font-weight: 600; color: #475569; padding: 8px 16px; background: #f8fafc; border: 1px solid #e2e8f0;">
-                        Active Applicants: <span style="color:#2563eb; font-weight: 700;"><?php echo count($activeApplicants); ?></span>
+                        Active Applicants: <span style="color:#2563eb; font-weight: 700;" id="activeCount"><?php echo count($activeApplicants); ?></span>
                     </div>
                 </div>
 
@@ -1957,7 +2056,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
                 <?php if (count($activeApplicants) > 0): ?>
                     <div class="table-wrapper">
-                        <div class="table-container">
+                        <div class="table-container" id="activeTableContainer">
                             <table class="applicant-table" id="applicantsTable">
                                 <thead>
                                     <tr>
@@ -1970,102 +2069,19 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                         <th style="text-align: center;">Details</th>
                                     </tr>
                                 </thead>
-                                <tbody>
-                                    <?php foreach ($activeApplicants as $app): ?>
-                                        <?php 
-                                        $appId = (int)$app['id'];
-                                        
-                                        // Build student fullname
-                                        $studentName = $app['student_firstname'] ?? '';
-                                        if (!empty($app['student_middlename'])) {
-                                            $studentName .= ' ' . $app['student_middlename'];
-                                        }
-                                        $studentName .= ' ' . ($app['student_lastname'] ?? '');
-                                        if (!empty($app['student_suffix'])) {
-                                            $studentName .= ' ' . $app['student_suffix'];
-                                        }
-                                        $studentName = trim($studentName);
-                                        if (empty($studentName)) {
-                                            $studentName = $app['student_username'] ?? 'Student';
-                                        }
-                                        ?>
-                                        <tr>
-                                            <td>
-                                                <strong style="color: #0f172a; font-size: 0.95rem;"><?php echo htmlspecialchars($studentName); ?></strong>
-                                                <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
-                                                    <i class="fa-regular fa-envelope" style="margin-right: 2px;"></i> <?php echo htmlspecialchars($app['student_email']); ?>
-                                                </div>
-                                            </td>
-                                            <td><?php echo htmlspecialchars($app['job_title']); ?></td>
-                                            <td>
-                                                <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border:1px solid #e2e8f0; font-weight: 600; color:#475569;">
-                                                    <?php echo htmlspecialchars($app['company_name']); ?>
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <i class="fa-regular fa-clock" style="color: #94a3b8; margin-right: 4px; font-size: 0.8rem;"></i>
-                                                <?php echo htmlspecialchars(date('M d, Y', strtotime($app['application_date']))); ?>
-                                            </td>
-                                            <td>
-                                                 <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                                                     <?php if (!empty($app['cv_path'])): ?>
-                                                         <a href="../<?php echo htmlspecialchars($app['cv_path']); ?>" class="doc-link" title="View CV" onclick="event.preventDefault(); openDocViewer(this.href, 'CV - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
-                                                             <i class="<?php echo getFileIconClass($app['cv_path']); ?>"></i> CV
-                                                         </a>
-                                                     <?php endif; ?>
-
-                                                     <?php if (!empty($app['resume_path'])): ?>
-                                                         <a href="../<?php echo htmlspecialchars($app['resume_path']); ?>" class="doc-link" title="View Resume" onclick="event.preventDefault(); openDocViewer(this.href, 'Resume - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
-                                                             <i class="<?php echo getFileIconClass($app['resume_path']); ?>"></i> Res
-                                                         </a>
-                                                     <?php endif; ?>
-
-                                                     <?php if (!empty($app['application_letter_path'])): ?>
-                                                         <a href="../<?php echo htmlspecialchars($app['application_letter_path']); ?>" class="doc-link" title="View Application Letter" onclick="event.preventDefault(); openDocViewer(this.href, 'App Letter - <?php echo htmlspecialchars(addslashes($studentName)); ?>');">
-                                                             <i class="<?php echo getFileIconClass($app['application_letter_path']); ?>"></i> Let
-                                                         </a>
-                                                     <?php endif; ?>
-                                                 </div>
-                                            </td>
-                                            <td class="action-column">
-                                                <?php 
-                                                $status = htmlspecialchars($app['status']);
-                                                if ($status === 'withdrawn'): 
-                                                ?>
-                                                    <span style="display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0;">
-                                                        Withdrawn
-                                                    </span>
-                                                <?php else: ?>
-                                                    <div class="action-buttons-inline">
-                                                        <form method="POST" action="applicant.php" style="margin: 0; display: inline;">
-                                                            <input type="hidden" name="action" value="update_status">
-                                                            <input type="hidden" name="application_id" value="<?php echo $appId; ?>">
-                                                            <input type="hidden" name="status" value="accepted">
-                                                            <button type="submit" class="btn-status-accept" title="Accept Candidate">
-                                                                <i class="fa-solid fa-circle-check"></i> Accept
-                                                            </button>
-                                                        </form>
-                                                        <form method="POST" action="applicant.php" style="margin: 0; display: inline;" onsubmit="return confirm('Are you sure you want to reject this applicant?')">
-                                                            <input type="hidden" name="action" value="update_status">
-                                                            <input type="hidden" name="application_id" value="<?php echo $appId; ?>">
-                                                            <input type="hidden" name="status" value="rejected">
-                                                            <button type="submit" class="btn-status-reject" title="Reject Candidate">
-                                                                <i class="fa-solid fa-circle-xmark"></i> Reject
-                                                            </button>
-                                                        </form>
-                                                    </div>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td style="text-align: center;">
-                                                <button type="button" class="btn-view" onclick="openDetailsModal(<?php echo $appId; ?>)">
-                                                    <i class="fa-solid fa-folder-open"></i> View
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
+                                <tbody id="activeTableBody">
+                                    <!-- Populated by JavaScript -->
                                 </tbody>
                             </table>
                         </div>
+                    </div>
+                    
+                    <!-- Pagination for Active Applicants -->
+                    <div class="pagination-wrapper" id="activePagination">
+                        <span class="page-info" id="activePageInfo">Showing 1–10 of 0</span>
+                        <a href="#" class="page-link disabled" id="activePrevPage">Prev</a>
+                        <span id="activePageNumbers"></span>
+                        <a href="#" class="page-link" id="activeNextPage">Next</a>
                     </div>
                 <?php else: ?>
                     <div class="empty-state" style="margin-top: 16px;">
@@ -2076,6 +2092,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <?php endif; ?>
             </div>
 
+            <!-- Table Card 2: Decision Applicants -->
             <div class="page-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 12px;">
                     <div>
@@ -2083,7 +2100,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <p style="margin: 4px 0 0; font-size: 0.85rem; color:#64748b;">Accepted and rejected applicants recorded by the supervisor.</p>
                     </div>
                     <div style="font-size: 0.85rem; font-weight: 600; color: #475569; padding: 8px 16px; background: #f8fafc; border: 1px solid #e2e8f0;">
-                        Decision Records: <span style="color:#2563eb; font-weight: 700;"><?php echo count($decisionApplicants); ?></span>
+                        Decision Records: <span style="color:#2563eb; font-weight: 700;" id="decisionCount"><?php echo count($decisionApplicants); ?></span>
                     </div>
                 </div>
 
@@ -2097,7 +2114,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
                 <?php if (count($decisionApplicants) > 0): ?>
                     <div class="table-wrapper">
-                        <div class="table-container">
+                        <div class="table-container" id="decisionTableContainer">
                             <table class="applicant-table" id="decisionTable">
                                 <thead>
                                     <tr>
@@ -2109,57 +2126,19 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                         <th style="text-align: center;">Details</th>
                                     </tr>
                                 </thead>
-                                <tbody>
-                                    <?php foreach ($decisionApplicants as $app): ?>
-                                        <?php
-                                        $appId = (int)$app['id'];
-
-                                        $studentName = $app['student_firstname'] ?? '';
-                                        if (!empty($app['student_middlename'])) {
-                                            $studentName .= ' ' . $app['student_middlename'];
-                                        }
-                                        $studentName .= ' ' . ($app['student_lastname'] ?? '');
-                                        if (!empty($app['student_suffix'])) {
-                                            $studentName .= ' ' . $app['student_suffix'];
-                                        }
-                                        $studentName = trim($studentName);
-                                        if (empty($studentName)) {
-                                            $studentName = $app['student_username'] ?? 'Student';
-                                        }
-                                        $status = strtolower($app['status'] ?? '');
-                                        ?>
-                                        <tr data-status="<?php echo htmlspecialchars($status); ?>">
-                                            <td>
-                                                <strong style="color: #0f172a; font-size: 0.95rem;"><?php echo htmlspecialchars($studentName); ?></strong>
-                                                <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
-                                                    <i class="fa-regular fa-envelope" style="margin-right: 2px;"></i> <?php echo htmlspecialchars($app['student_email']); ?>
-                                                </div>
-                                            </td>
-                                            <td><?php echo htmlspecialchars($app['job_title']); ?></td>
-                                            <td>
-                                                <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border:1px solid #e2e8f0; font-weight: 600; color:#475569;">
-                                                    <?php echo htmlspecialchars($app['company_name']); ?>
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <i class="fa-regular fa-clock" style="color: #94a3b8; margin-right: 4px; font-size: 0.8rem;"></i>
-                                                <?php echo htmlspecialchars(date('M d, Y', strtotime($app['updated_at'] ?? $app['application_date']))); ?>
-                                            </td>
-                                            <td>
-                                                <span class="status-chip <?php echo htmlspecialchars($status); ?>">
-                                                    <?php echo htmlspecialchars(ucfirst($status)); ?>
-                                                </span>
-                                            </td>
-                                            <td style="text-align: center;">
-                                                <button type="button" class="btn-view" onclick="openDetailsModal(<?php echo $appId; ?>)">
-                                                    <i class="fa-solid fa-folder-open"></i> View
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
+                                <tbody id="decisionTableBody">
+                                    <!-- Populated by JavaScript -->
                                 </tbody>
                             </table>
                         </div>
+                    </div>
+                    
+                    <!-- Pagination for Decision Applicants -->
+                    <div class="pagination-wrapper" id="decisionPagination">
+                        <span class="page-info" id="decisionPageInfo">Showing 1–10 of 0</span>
+                        <a href="#" class="page-link disabled" id="decisionPrevPage">Prev</a>
+                        <span id="decisionPageNumbers"></span>
+                        <a href="#" class="page-link" id="decisionNextPage">Next</a>
                     </div>
                 <?php else: ?>
                     <div class="empty-state" style="margin-top: 16px;">
@@ -2315,10 +2294,17 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
     <!-- Javascript Actions -->
     <script>
-        const applicantsList = <?php echo json_encode($applicants); ?>;
-        const decisionList = <?php echo json_encode($decisionApplicants); ?>;
-        // Combine both lists for modal access
-        const allApplicants = [...applicantsList, ...decisionList];
+        // ===== DATA =====
+        const activeApplicants = <?php echo json_encode($activeApplicants); ?>;
+        const decisionApplicants = <?php echo json_encode($decisionApplicants); ?>;
+        const allApplicants = [...activeApplicants, ...decisionApplicants];
+
+        // ===== PAGINATION VARIABLES =====
+        let activeCurrentPage = 1;
+        let decisionCurrentPage = 1;
+        const itemsPerPage = 10;
+        let activeFilteredData = [];
+        let decisionFilteredData = [];
 
         // ===== NOTIFICATION FUNCTIONS =====
 
@@ -2398,7 +2384,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <div class="notif-content">
                             <div class="notif-title">${escapeHtml(notif.title || 'Notification')}</div>
                             <div class="notif-message">${escapeHtml(notif.message || '')}</div>
-                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${escapeHtml(notif.message || '')} - ${timeAgo(notif.created_at)}</span>
+                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${timeAgo(notif.created_at)}</span>
                         </div>
                     </a>
                 `;
@@ -2526,9 +2512,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         // Notification bell toggle
         document.getElementById('notifBell').addEventListener('click', function(e) {
             e.stopPropagation();
-            document.querySelectorAll('.notif-item.unread').forEach(item => item.classList.remove('unread'));
-            document.getElementById('notifBadge').classList.add('hidden');
-            document.getElementById('notifBadge').textContent = '';
             toggleNotifications();
         });
 
@@ -2918,46 +2901,385 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         };
 
-        // Table Instant Search Filtering logic
+        // ===== PAGINATION FUNCTIONS =====
+
+        /**
+         * Render active applicants page
+         */
+        function renderActivePage(page) {
+            activeCurrentPage = page;
+            const totalItems = activeFilteredData.length;
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            
+            const pagination = document.getElementById('activePagination');
+            if (!pagination) return;
+            
+            if (totalItems === 0) {
+                pagination.style.display = 'flex';
+                document.getElementById('activePageInfo').textContent = 'Showing 0–0 of 0';
+                document.getElementById('activePrevPage').className = 'page-link disabled';
+                document.getElementById('activeNextPage').className = 'page-link disabled';
+                document.getElementById('activePageNumbers').innerHTML = '';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            
+            const start = (page - 1) * itemsPerPage;
+            const end = Math.min(start + itemsPerPage, totalItems);
+            const pageItems = activeFilteredData.slice(start, end);
+            
+            document.getElementById('activePageInfo').textContent = 
+                `Showing ${start + 1}–${end} of ${totalItems}`;
+            
+            renderActiveTable(pageItems);
+            
+            // Update pagination controls
+            const prevLink = document.getElementById('activePrevPage');
+            const nextLink = document.getElementById('activeNextPage');
+            const pageNumbers = document.getElementById('activePageNumbers');
+            
+            prevLink.className = 'page-link' + (page <= 1 ? ' disabled' : '');
+            prevLink.onclick = function(e) {
+                e.preventDefault();
+                if (page > 1) renderActivePage(page - 1);
+            };
+            
+            nextLink.className = 'page-link' + (page >= totalPages ? ' disabled' : '');
+            nextLink.onclick = function(e) {
+                e.preventDefault();
+                if (page < totalPages) renderActivePage(page + 1);
+            };
+            
+            // Generate page numbers
+            let pageHtml = '';
+            const maxVisible = 5;
+            let startPage = Math.max(1, page - Math.floor(maxVisible / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+            
+            if (endPage - startPage < maxVisible - 1) {
+                startPage = Math.max(1, endPage - maxVisible + 1);
+            }
+            
+            if (startPage > 1) {
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderActivePage(1)">1</a>`;
+                if (startPage > 2) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+            }
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageHtml += `<a href="#" class="page-link${i === page ? ' active' : ''}" onclick="event.preventDefault(); renderActivePage(${i})">${i}</a>`;
+            }
+            
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderActivePage(${totalPages})">${totalPages}</a>`;
+            }
+            
+            pageNumbers.innerHTML = pageHtml;
+        }
+
+        /**
+         * Render active applicants table
+         */
+        function renderActiveTable(applicants) {
+            const tbody = document.getElementById('activeTableBody');
+            if (!tbody) return;
+            
+            let html = '';
+            applicants.forEach(app => {
+                const appId = parseInt(app.id);
+                let studentName = app.student_firstname || '';
+                if (app.student_middlename) studentName += ' ' + app.student_middlename;
+                studentName += ' ' + (app.student_lastname || '');
+                if (app.student_suffix) studentName += ' ' + app.student_suffix;
+                studentName = studentName.trim() || app.student_username || 'Student';
+                
+                const status = app.status || '';
+                const isWithdrawn = status === 'withdrawn';
+                
+                html += `
+                    <tr>
+                        <td>
+                            <strong style="color: #0f172a; font-size: 0.95rem;">${escapeHtml(studentName)}</strong>
+                            <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
+                                <i class="fa-regular fa-envelope" style="margin-right: 2px;"></i> ${escapeHtml(app.student_email || '')}
+                            </div>
+                        </td>
+                        <td>${escapeHtml(app.job_title || '')}</td>
+                        <td>
+                            <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border:1px solid #e2e8f0; font-weight: 600; color:#475569;">
+                                ${escapeHtml(app.company_name || '')}
+                            </span>
+                        </td>
+                        <td>
+                            <i class="fa-regular fa-clock" style="color: #94a3b8; margin-right: 4px; font-size: 0.8rem;"></i>
+                            ${app.application_date ? new Date(app.application_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                        </td>
+                        <td>
+                            <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                                ${app.cv_path ? `<a href="../${escapeHtml(app.cv_path)}" class="doc-link" title="View CV" onclick="event.preventDefault(); openDocViewer(this.href, 'CV - ${escapeHtml(studentName)}');"><i class="${getFileIconClass(app.cv_path)}"></i> CV</a>` : ''}
+                                ${app.resume_path ? `<a href="../${escapeHtml(app.resume_path)}" class="doc-link" title="View Resume" onclick="event.preventDefault(); openDocViewer(this.href, 'Resume - ${escapeHtml(studentName)}');"><i class="${getFileIconClass(app.resume_path)}"></i> Res</a>` : ''}
+                                ${app.application_letter_path ? `<a href="../${escapeHtml(app.application_letter_path)}" class="doc-link" title="View Application Letter" onclick="event.preventDefault(); openDocViewer(this.href, 'App Letter - ${escapeHtml(studentName)}');"><i class="${getFileIconClass(app.application_letter_path)}"></i> Let</a>` : ''}
+                            </div>
+                        </td>
+                        <td class="action-column">
+                            ${isWithdrawn ? 
+                                `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0;">Withdrawn</span>` :
+                                `<div class="action-buttons-inline">
+                                    <form method="POST" action="applicant.php" style="margin: 0; display: inline;">
+                                        <input type="hidden" name="action" value="update_status">
+                                        <input type="hidden" name="application_id" value="${appId}">
+                                        <input type="hidden" name="status" value="accepted">
+                                        <button type="submit" class="btn-status-accept" title="Accept Candidate">
+                                            <i class="fa-solid fa-circle-check"></i> Accept
+                                        </button>
+                                    </form>
+                                    <form method="POST" action="applicant.php" style="margin: 0; display: inline;" onsubmit="return confirm('Are you sure you want to reject this applicant?')">
+                                        <input type="hidden" name="action" value="update_status">
+                                        <input type="hidden" name="application_id" value="${appId}">
+                                        <input type="hidden" name="status" value="rejected">
+                                        <button type="submit" class="btn-status-reject" title="Reject Candidate">
+                                            <i class="fa-solid fa-circle-xmark"></i> Reject
+                                        </button>
+                                    </form>
+                                </div>`
+                            }
+                        </td>
+                        <td style="text-align: center;">
+                            <button type="button" class="btn-view" onclick="openDetailsModal(${appId})">
+                                <i class="fa-solid fa-folder-open"></i> View
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            tbody.innerHTML = html;
+        }
+
+        /**
+         * Render decision applicants page
+         */
+        function renderDecisionPage(page) {
+            decisionCurrentPage = page;
+            const totalItems = decisionFilteredData.length;
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            
+            const pagination = document.getElementById('decisionPagination');
+            if (!pagination) return;
+            
+            if (totalItems === 0) {
+                pagination.style.display = 'flex';
+                document.getElementById('decisionPageInfo').textContent = 'Showing 0–0 of 0';
+                document.getElementById('decisionPrevPage').className = 'page-link disabled';
+                document.getElementById('decisionNextPage').className = 'page-link disabled';
+                document.getElementById('decisionPageNumbers').innerHTML = '';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            
+            const start = (page - 1) * itemsPerPage;
+            const end = Math.min(start + itemsPerPage, totalItems);
+            const pageItems = decisionFilteredData.slice(start, end);
+            
+            document.getElementById('decisionPageInfo').textContent = 
+                `Showing ${start + 1}–${end} of ${totalItems}`;
+            
+            renderDecisionTable(pageItems);
+            
+            // Update pagination controls
+            const prevLink = document.getElementById('decisionPrevPage');
+            const nextLink = document.getElementById('decisionNextPage');
+            const pageNumbers = document.getElementById('decisionPageNumbers');
+            
+            prevLink.className = 'page-link' + (page <= 1 ? ' disabled' : '');
+            prevLink.onclick = function(e) {
+                e.preventDefault();
+                if (page > 1) renderDecisionPage(page - 1);
+            };
+            
+            nextLink.className = 'page-link' + (page >= totalPages ? ' disabled' : '');
+            nextLink.onclick = function(e) {
+                e.preventDefault();
+                if (page < totalPages) renderDecisionPage(page + 1);
+            };
+            
+            // Generate page numbers
+            let pageHtml = '';
+            const maxVisible = 5;
+            let startPage = Math.max(1, page - Math.floor(maxVisible / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+            
+            if (endPage - startPage < maxVisible - 1) {
+                startPage = Math.max(1, endPage - maxVisible + 1);
+            }
+            
+            if (startPage > 1) {
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderDecisionPage(1)">1</a>`;
+                if (startPage > 2) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+            }
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageHtml += `<a href="#" class="page-link${i === page ? ' active' : ''}" onclick="event.preventDefault(); renderDecisionPage(${i})">${i}</a>`;
+            }
+            
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderDecisionPage(${totalPages})">${totalPages}</a>`;
+            }
+            
+            pageNumbers.innerHTML = pageHtml;
+        }
+
+        /**
+         * Render decision applicants table
+         */
+        function renderDecisionTable(applicants) {
+            const tbody = document.getElementById('decisionTableBody');
+            if (!tbody) return;
+            
+            let html = '';
+            applicants.forEach(app => {
+                const appId = parseInt(app.id);
+                let studentName = app.student_firstname || '';
+                if (app.student_middlename) studentName += ' ' + app.student_middlename;
+                studentName += ' ' + (app.student_lastname || '');
+                if (app.student_suffix) studentName += ' ' + app.student_suffix;
+                studentName = studentName.trim() || app.student_username || 'Student';
+                
+                const status = (app.status || '').toLowerCase();
+                
+                html += `
+                    <tr data-status="${escapeHtml(status)}">
+                        <td>
+                            <strong style="color: #0f172a; font-size: 0.95rem;">${escapeHtml(studentName)}</strong>
+                            <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
+                                <i class="fa-regular fa-envelope" style="margin-right: 2px;"></i> ${escapeHtml(app.student_email || '')}
+                            </div>
+                        </td>
+                        <td>${escapeHtml(app.job_title || '')}</td>
+                        <td>
+                            <span style="font-size:0.75rem; background:#f1f5f9; padding:2px 8px; border:1px solid #e2e8f0; font-weight: 600; color:#475569;">
+                                ${escapeHtml(app.company_name || '')}
+                            </span>
+                        </td>
+                        <td>
+                            <i class="fa-regular fa-clock" style="color: #94a3b8; margin-right: 4px; font-size: 0.8rem;"></i>
+                            ${app.updated_at ? new Date(app.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : (app.application_date ? new Date(app.application_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '')}
+                        </td>
+                        <td>
+                            <span class="status-chip ${escapeHtml(status)}">
+                                ${escapeHtml(ucfirst(status))}
+                            </span>
+                        </td>
+                        <td style="text-align: center;">
+                            <button type="button" class="btn-view" onclick="openDetailsModal(${appId})">
+                                <i class="fa-solid fa-folder-open"></i> View
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            tbody.innerHTML = html;
+        }
+
+        /**
+         * Helper function to capitalize first letter
+         */
+        function ucfirst(str) {
+            if (!str) return '';
+            return str.charAt(0).toUpperCase() + str.slice(1);
+        }
+
+        /**
+         * Get file icon class based on extension
+         */
+        function getFileIconClass(path) {
+            if (!path) return 'fa-solid fa-file-lines';
+            const ext = path.split('.').pop().toLowerCase();
+            if (ext === 'pdf') return 'fa-solid fa-file-pdf';
+            if (['doc', 'docx'].includes(ext)) return 'fa-solid fa-file-word';
+            return 'fa-solid fa-file-lines';
+        }
+
+        // ===== FILTER FUNCTIONS =====
+
+        /**
+         * Filter active applicants table
+         */
         function filterApplicantsTable() {
             const input = document.getElementById('applicantSearchInput');
             const filter = input.value.toLowerCase();
-            const table = document.getElementById('applicantsTable');
-            if (!table) return;
             
-            const trs = table.getElementsByTagName('tr');
-
-            for (let i = 1; i < trs.length; i++) {
-                const tr = trs[i];
-                let display = false;
-                
-                const nameCell = tr.cells[0];
-                const titleCell = tr.cells[1];
-                const companyCell = tr.cells[2];
-
-                if (nameCell || titleCell || companyCell) {
-                    const text = (nameCell.textContent + ' ' + titleCell.textContent + ' ' + companyCell.textContent).toLowerCase();
-                    if (text.indexOf(filter) > -1) {
-                        display = true;
-                    }
-                }
-                tr.style.display = display ? '' : 'none';
+            if (filter.trim() === '') {
+                activeFilteredData = [...activeApplicants];
+            } else {
+                activeFilteredData = activeApplicants.filter(app => {
+                    let studentName = app.student_firstname || '';
+                    if (app.student_middlename) studentName += ' ' + app.student_middlename;
+                    studentName += ' ' + (app.student_lastname || '');
+                    if (app.student_suffix) studentName += ' ' + app.student_suffix;
+                    studentName = studentName.trim().toLowerCase();
+                    
+                    const company = (app.company_name || '').toLowerCase();
+                    const job = (app.job_title || '').toLowerCase();
+                    
+                    return studentName.includes(filter) || company.includes(filter) || job.includes(filter);
+                });
             }
+            
+            renderActivePage(1);
         }
 
+        /**
+         * Filter decision applicants table
+         */
         function filterDecisionTable() {
             const filterSelect = document.getElementById('decisionStatusFilter');
             const filterValue = filterSelect ? filterSelect.value : 'all';
-            const table = document.getElementById('decisionTable');
-            if (!table) return;
-
-            const rows = table.querySelectorAll('tbody tr');
-            rows.forEach((row) => {
-                const rowStatus = (row.dataset.status || '').toLowerCase();
-                const shouldShow = filterValue === 'all' || rowStatus === filterValue;
-                row.style.display = shouldShow ? '' : 'none';
-            });
+            
+            if (filterValue === 'all') {
+                decisionFilteredData = [...decisionApplicants];
+            } else {
+                decisionFilteredData = decisionApplicants.filter(app => 
+                    (app.status || '').toLowerCase() === filterValue
+                );
+            }
+            
+            renderDecisionPage(1);
         }
+
+        // ===== INITIALIZATION =====
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize active applicants
+            if (activeApplicants.length > 0) {
+                activeFilteredData = [...activeApplicants];
+                renderActivePage(1);
+            } else {
+                // Hide pagination if no data
+                const pagination = document.getElementById('activePagination');
+                if (pagination) pagination.style.display = 'flex';
+            }
+            
+            // Initialize decision applicants
+            if (decisionApplicants.length > 0) {
+                decisionFilteredData = [...decisionApplicants];
+                renderDecisionPage(1);
+            } else {
+                const pagination = document.getElementById('decisionPagination');
+                if (pagination) pagination.style.display = 'flex';
+            }
+        });
 
         // Close modals on Escape key
         document.addEventListener('keydown', function(event) {

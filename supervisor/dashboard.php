@@ -1985,7 +1985,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                 ${isDPR ? `<span class="dpr-tag">DPR</span>` : ''}
                             </div>
                             <div class="notif-message">${escapeHtml(notif.message || '')}</div>
-                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${escapeHtml(notif.message || '')} - ${timeAgo(notif.created_at)}</span>
+                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${timeAgo(notif.created_at)}</span>
                         </div>
                     </a>
                 `;

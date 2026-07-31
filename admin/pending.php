@@ -1,5 +1,5 @@
 <?php
-// admin/dashboard.php
+// admin/dashboard.php (Pending Approvals)
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
@@ -29,10 +29,10 @@ function getUserProfilePicture($pdo, $user_id) {
 
 // Handle AJAX requests for password change and avatar update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    header('Content-Type: application/json');
-    
-    // Change password
+    // Handle password change
     if ($_POST['action'] === 'change_password') {
+        header('Content-Type: application/json');
+        
         $currentPassword = $_POST['current_password'] ?? '';
         $newPassword = $_POST['new_password'] ?? '';
         $confirmPassword = $_POST['confirm_password'] ?? '';
@@ -71,8 +71,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
-    // Update profile picture
+    // Handle avatar update
     if ($_POST['action'] === 'update_avatar' && isset($_FILES['avatar'])) {
+        header('Content-Type: application/json');
+        
         $file = $_FILES['avatar'];
         $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
         $maxSize = 2 * 1024 * 1024; // 2MB
@@ -116,6 +118,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
         exit;
     }
+    
+    // Handle user approval/decline actions (with page preservation)
+    if (isset($_POST['action']) && in_array($_POST['action'], ['approve_user', 'decline_user'])) {
+        $targetUserId = (int)$_POST['user_id'];
+        $success = false;
+        if ($_POST['action'] === 'approve_user') {
+            $success = approveUser($pdo, $targetUserId);
+            $message = $success ? 'User approved successfully.' : 'Failed to approve user.';
+        } else {
+            $success = declineUser($pdo, $targetUserId);
+            $message = $success ? 'User declined and removed.' : 'Failed to decline user.';
+        }
+        $_SESSION['message'] = $message;
+        // Preserve current page
+        $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+        redirect('dashboard.php?page=' . $page);
+        exit;
+    }
 }
 
 function getTableCountSafe($pdo, $tableName, $where = '') {
@@ -142,6 +162,30 @@ $dashboardStats = [
     'pendingUsers' => getTableCountSafe($pdo, 'users', "status = 'pending'"),
 ];
 
+// ===== PAGINATION FOR PENDING USERS =====
+$currentPage = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($currentPage < 1) $currentPage = 1;
+$limit = 10;
+$offset = ($currentPage - 1) * $limit;
+
+// Get total pending users
+$totalPending = $dashboardStats['pendingUsers'];
+$totalPages = ceil($totalPending / $limit);
+
+// Fetch pending users for current page
+$pendingUsers = [];
+if ($totalPending > 0) {
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE status = 'pending' ORDER BY created_at ASC LIMIT ? OFFSET ?");
+    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+    $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    $pendingUsers = $stmt->fetchAll();
+}
+
+// Get messages
+$message = $_SESSION['message'] ?? '';
+unset($_SESSION['message']);
+
 // Current profile picture
 $profilePicture = getUserProfilePicture($pdo, $userId);
 $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
@@ -151,7 +195,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard</title>
+    <title>Pending Approvals - Admin</title>
     <link rel="stylesheet" href="../assets/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -440,35 +484,346 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             font-weight: 500;
         }
 
-        /* ---- Page card (sharp, bordered) ---- */
+        /* ---- Page content (compressed) ---- */
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
         .page-card {
             background: #ffffff;
             border: 1px solid #e2e8f0;
-            padding: 32px 28px;
+            padding: 20px 24px 28px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
-            flex: 1;
             border-radius: 0;
         }
 
-        .page-card h2 {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: #0f172a;
-            margin-bottom: 8px;
+        .page-card .section-header {
             display: flex;
+            justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
             gap: 12px;
+            margin-bottom: 16px;
         }
 
-        .page-card h2 i {
+        .page-card .section-header h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #0f172a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .page-card .section-header h2 i {
             color: #3b82f6;
         }
 
-        .page-card p {
+        .page-card .section-header .badge-count {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 12px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #475569;
+            border-radius: 0;
+        }
+
+        /* ---- Tables (compressed) ---- */
+        .table-wrap {
+            overflow-x: auto;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
+            border-radius: 0;
+            min-height: 320px; /* Added min-height */
+        }
+
+        .user-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+
+        .user-table th {
+            background: #f8fafc;
+            color: #1e293b;
+            font-weight: 600;
+            padding: 8px 10px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+        }
+
+        .user-table td {
+            padding: 7px 10px;
+            border-bottom: 1px solid #f1f5f9;
+            vertical-align: middle;
+        }
+
+        .user-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .user-table tbody tr:hover {
+            background: #fafcff;
+        }
+
+        .user-name {
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 0.82rem;
+        }
+
+        .user-info {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            margin-top: 1px;
+        }
+
+        /* ---- Form Elements (compressed) ---- */
+        .inline-form {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin: 0;
+        }
+
+        .inline-form select {
+            padding: 4px 8px;
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+            font-size: 0.7rem;
+            background: #fff;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            color: #0f172a;
+            min-width: 80px;
+        }
+
+        .inline-form select:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        .inline-form button {
+            padding: 4px 10px;
+            border-radius: 0;
+            font-size: 0.7rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            border: 1px solid transparent;
+        }
+
+        .btn-view {
+            background: #eef2ff;
+            color: #4338ca;
+            border-color: #a5b4fc;
+            padding: 4px 10px;
+        }
+
+        .btn-view:hover {
+            background: #c7d2fe;
+            transform: scale(1.02);
+        }
+
+        .btn-success {
+            background: #dcfce7;
+            color: #166534;
+            border-color: #86efac;
+        }
+
+        .btn-success:hover {
+            background: #bbf7d0;
+            transform: scale(1.02);
+        }
+
+        .btn-danger {
+            background: #fee2e2;
+            color: #991b1b;
+            border-color: #fca5a5;
+        }
+
+        .btn-danger:hover {
+            background: #fecaca;
+            transform: scale(1.02);
+        }
+
+        .actions-wrap {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        /* ---- Pending Section ---- */
+        .pending-section {
+            border-left: 3px solid #f59e0b;
+        }
+
+        /* ---- Empty State ---- */
+        .empty-state {
+            text-align: center;
+            padding: 30px 20px;
+            color: #94a3b8;
+        }
+
+        .empty-state i {
+            font-size: 2rem;
+            display: block;
+            margin-bottom: 8px;
+            color: #cbd5e1;
+        }
+
+        .empty-state p {
+            font-size: 0.85rem;
+        }
+
+        /* ===== PAGINATION (bottom right) ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
             color: #64748b;
-            font-size: 1rem;
-            line-height: 1.7;
-            margin-bottom: 28px;
+            margin-right: 12px;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
+        /* ---- Profile Sidebar ---- */
+        .profile-sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+        }
+
+        .profile-sidebar-overlay.open {
+            display: block;
+        }
+
+        #profileSidebar {
+            position: fixed;
+            top: 0;
+            right: -380px;
+            width: 380px;
+            height: 100vh;
+            background: #fff;
+            border-left: 1px solid #e2e8f0;
+            padding: 24px;
+            z-index: 1001;
+            transition: right 0.3s ease;
+            overflow-y: auto;
+            box-shadow: -10px 0 30px rgba(0,0,0,0.05);
+        }
+
+        #profileSidebar.open {
+            right: 0;
+        }
+
+        #profileSidebar .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.8rem;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0 8px;
+            transition: 0.15s;
+            line-height: 1;
+        }
+
+        #profileSidebar .modal-close:hover {
+            color: #1e293b;
+        }
+
+        #profileSidebar h2 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 4px;
+        }
+
+        #profileSidebar hr {
+            border: none;
+            border-top: 1px solid #f1f5f9;
+            margin: 12px 0;
+        }
+
+        #profileSidebar .profile-detail {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            font-size: 0.85rem;
+            border-bottom: 1px solid #f8fafc;
+        }
+
+        #profileSidebar .profile-detail .label {
+            color: #64748b;
+            font-weight: 500;
+        }
+
+        #profileSidebar .profile-detail .value {
+            color: #0f172a;
+            font-weight: 500;
+            text-align: right;
+            word-break: break-word;
+            max-width: 60%;
         }
 
         /* ---- Dashboard Stats Grid ---- */
@@ -1021,9 +1376,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <h2>Admin<span>Panel</span></h2>
             </div>
             <nav class="nav-section">
-                <a class="nav-item " href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                <a class="nav-item" href="user_management.php"><i class="fa-solid fa-users-gear"></i> User Management</a>
-                <a class="nav-item active" href="pending.php"><i class="fa-solid fa-users-gear"></i> Pending</a>
+                 <a class="nav-item " href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
+                <a class="nav-item " href="user_management.php"><i class="fa-solid fa-users-gear"></i> User Management</a>
+                <a class="nav-item active" href="pending.php"><i class="fa-solid fa-clock-rotate-left"></i> Pending</a>
+                <a class="nav-item" href="company.php"><i class="fa-solid fa-building"></i> Company</a>
             </nav>
             <div class="sidebar-footer">
                 <a class="logout-btn-side" href="../logout.php"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
@@ -1039,8 +1395,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <i class="fa-solid fa-bars"></i>
                     </button>
                     <h1>
-                        <i class="fa-solid fa-gauge-high"></i>
-                        Dashboard
+                        <i class="fa-solid fa-clock"></i>
+                        Pending Approvals
                         <small>Admin</small>
                     </h1>
                 </div>
@@ -1073,8 +1429,388 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 </div>
             </div>
 
-            <!-- PAGE CARD -->
-            <div class="page-card">
-                
+            <!-- PAGE CONTENT -->
+            <div class="container">
+                <!-- Pending Approvals Section -->
+                <div class="page-card pending-section">
+                    <div class="section-header">
+                        <h2><i class="fa-regular fa-clock"></i> Pending Approvals <span class="badge-count"><?php echo $totalPending; ?></span></h2>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table class="user-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>Email</th>
+                                    <th>Phone</th>
+                                    <th>Registered</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($pendingUsers)): ?>
+                                    <tr>
+                                        <td colspan="6" class="empty-state">
+                                            <i class="fa-regular fa-check-circle"></i>
+                                            <p>No pending registrations.</p>
+                                        </td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($pendingUsers as $user): ?>
+                                        <tr>
+                                            <td><?php echo $user['id']; ?></td>
+                                            <td>
+                                                <div class="user-name"><?php echo htmlspecialchars(getFullName($user)); ?></div>
+                                                <div class="user-info">@<?php echo htmlspecialchars($user['username']); ?></div>
+                                            </td>
+                                            <td><?php echo htmlspecialchars($user['email']); ?></td>
+                                            <td><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></td>
+                                            <td><?php echo date('Y-m-d H:i', strtotime($user['created_at'])); ?></td>
+                                            <td>
+                                                <div class="actions-wrap">
+                                                    <form method="POST" class="inline-form">
+                                                        <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
+                                                        <button type="submit" name="action" value="approve_user" class="btn-success"><i class="fa-solid fa-check"></i> Approve</button>
+                                                        <button type="submit" name="action" value="decline_user" class="btn-danger"><i class="fa-solid fa-xmark"></i> Decline</button>
+                                                    </form>
+                                                    <button onclick="openProfile('<?php echo rawurlencode(json_encode($user)); ?>')" class="btn-view"><i class="fa-solid fa-eye"></i></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- ===== PAGINATION (always visible) ===== -->
+                    <div class="pagination-wrapper">
+                        <span class="page-info">
+                            <?php if ($totalPending > 0): ?>
+                                Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $limit, $totalPending); ?> of <?php echo $totalPending; ?>
+                            <?php else: ?>
+                                No pending users
+                            <?php endif; ?>
+                        </span>
+                        <?php
+                        // Previous link
+                        if ($currentPage > 1) {
+                            echo '<a href="?page=' . ($currentPage - 1) . '" class="page-link">Prev</a>';
+                        } else {
+                            echo '<span class="page-link disabled">Prev</span>';
+                        }
+
+                        // Page numbers (if there are pages)
+                        if ($totalPages > 0) {
+                            $start = max(1, $currentPage - 2);
+                            $end = min($totalPages, $currentPage + 2);
+                            if ($start > 1) {
+                                echo '<a href="?page=1" class="page-link">1</a>';
+                                if ($start > 2) echo '<span class="page-link disabled">…</span>';
+                            }
+                            for ($i = $start; $i <= $end; $i++) {
+                                $active = ($i == $currentPage) ? 'active' : '';
+                                echo '<a href="?page=' . $i . '" class="page-link ' . $active . '">' . $i . '</a>';
+                            }
+                            if ($end < $totalPages) {
+                                if ($end < $totalPages - 1) echo '<span class="page-link disabled">…</span>';
+                                echo '<a href="?page=' . $totalPages . '" class="page-link">' . $totalPages . '</a>';
+                            }
+                        }
+
+                        // Next link
+                        if ($currentPage < $totalPages) {
+                            echo '<a href="?page=' . ($currentPage + 1) . '" class="page-link">Next</a>';
+                        } else {
+                            echo '<span class="page-link disabled">Next</span>';
+                        }
+                        ?>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Profile Sidebar -->
+    <div id="profileSidebarOverlay" class="profile-sidebar-overlay"></div>
+    <aside id="profileSidebar">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h2><i class="fa-regular fa-user"></i> User Profile</h2>
+            <button class="modal-close" onclick="closeProfile()">&times;</button>
+        </div>
+        <div id="profileSidebarContent"></div>
+    </aside>
+
+    <!-- TOAST -->
+    <div class="toast" id="toast">
+        <i class="fa-regular fa-circle-check"></i>
+        <span id="toastMessage">Success!</span>
+    </div>
+
+    <script>
+        function openProfile(userJson) {
+            try {
+                const decoded = decodeURIComponent(userJson);
+                const user = JSON.parse(decoded);
+                const content = document.getElementById('profileSidebarContent');
+                content.innerHTML = `
+                    <div style="text-align:center;margin-bottom:16px;">
+                        <div style="width:80px;height:80px;border-radius:50%;background:#003300;color:#FFCC33;display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:700;margin:0 auto 8px;border:3px solid #FFCC33;text-transform:uppercase;">
+                            ${getFullNameJS(user).split(' ').map(n=>n[0]).join('').substring(0,2) || 'U'}
+                        </div>
+                        <div style="font-weight:700;font-size:1.1rem;color:#0f172a;">${escapeHtml(getFullNameJS(user))}</div>
+                        <div style="color:#94a3b8;font-size:0.85rem;">@${escapeHtml(user.username || '')}</div>
+                    </div>
+                    <hr>
+                    <div style="font-size:0.85rem;color:#334155;">
+                        <div class="profile-detail"><span class="label">First Name</span><span class="value">${escapeHtml(user.firstname || '')}</span></div>
+                        <div class="profile-detail"><span class="label">Middle Name</span><span class="value">${escapeHtml(user.middlename || 'N/A')}</span></div>
+                        <div class="profile-detail"><span class="label">Last Name</span><span class="value">${escapeHtml(user.lastname || '')}</span></div>
+                        <div class="profile-detail"><span class="label">Suffix</span><span class="value">${escapeHtml(user.suffix || 'N/A')}</span></div>
+                        <div class="profile-detail"><span class="label">Phone</span><span class="value">${escapeHtml(user.phone || 'N/A')}</span></div>
+                        <div class="profile-detail"><span class="label">Address</span><span class="value">${escapeHtml(user.address || 'N/A')}</span></div>
+                        <div class="profile-detail"><span class="label">Birthdate</span><span class="value">${escapeHtml(user.birthdate || 'N/A')}</span></div>
+                        <div class="profile-detail"><span class="label">Email</span><span class="value">${escapeHtml(user.email || '')}</span></div>
+                        <div class="profile-detail"><span class="label">Role</span><span class="value"><span style="text-transform:capitalize;">${escapeHtml(user.role || '')}</span></span></div>
+                        <div class="profile-detail"><span class="label">Status</span><span class="value"><span style="text-transform:capitalize;">${escapeHtml(user.status || '')}</span></span></div>
+                        <div class="profile-detail"><span class="label">Created</span><span class="value">${escapeHtml(user.created_at || '')}</span></div>
+                    </div>
+                `;
+                document.getElementById('profileSidebar').classList.add('open');
+                document.getElementById('profileSidebarOverlay').classList.add('open');
+                document.body.style.overflow = 'hidden';
+            } catch (e) {
+                console.error('Error parsing user data', e);
+            }
+        }
+
+        function closeProfile() {
+            document.getElementById('profileSidebar').classList.remove('open');
+            document.getElementById('profileSidebarOverlay').classList.remove('open');
+            document.body.style.overflow = 'auto';
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/[&<>"'`]/g, function (s) {
+                return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'})[s];
+            });
+        }
+
+        function getFullNameJS(user) {
+            return [user.firstname, user.middlename, user.lastname, user.suffix].filter(Boolean).join(' ');
+        }
+
+        // ===== TOAST =====
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            
+            const icon = toast.querySelector('i');
+            if (type === 'success') {
+                icon.className = 'fa-regular fa-circle-check';
+            } else if (type === 'error') {
+                icon.className = 'fa-regular fa-circle-xmark';
+            }
+            
+            toast.className = 'toast ' + type + ' show';
+            toastMessage.textContent = message;
+            
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        <?php if ($message): 
+            $isError = strpos($message, 'Error:') !== false || strpos($message, 'Failed') !== false;
+        ?>
+            document.addEventListener('DOMContentLoaded', function() {
+                showToast('<?php echo htmlspecialchars($message); ?>', '<?php echo $isError ? 'error' : 'success'; ?>');
+            });
+        <?php endif; ?>
+
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
+
+        // ===== MOBILE MENU TOGGLE =====
+        const sidebar = document.getElementById('sidebar');
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+        function toggleSidebar() {
+            sidebar.classList.toggle('open');
+            sidebarOverlay.classList.toggle('show');
+            document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
+        }
+
+        function closeSidebar() {
+            sidebar.classList.remove('open');
+            sidebarOverlay.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+
+        if (menuToggle) {
+            menuToggle.addEventListener('click', toggleSidebar);
+        }
+
+        if (sidebarOverlay) {
+            sidebarOverlay.addEventListener('click', closeSidebar);
+        }
+
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                if (document.getElementById('profileSidebar').classList.contains('open')) {
+                    closeProfile();
+                }
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            }
+        });
+
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+
+        window.onclick = function(event) {
+            const overlay = document.getElementById('profileSidebarOverlay');
+            if (event.target === overlay) closeProfile();
+        }
+
+        // ===== PASSWORD MODAL =====
+        const passwordModal = document.getElementById('passwordModal');
+        const openPasswordBtn = document.getElementById('openPasswordModalBtn');
+        const closePasswordBtn = document.getElementById('closePasswordBtn');
+        const closePasswordBtn2 = document.getElementById('closePasswordBtn2');
+        const passwordForm = document.getElementById('passwordForm');
+
+        if (openPasswordBtn) {
+            openPasswordBtn.addEventListener('click', function() {
+                if (passwordModal) {
+                    passwordModal.classList.add('active');
+                    document.body.style.overflow = 'hidden';
+                    if (passwordForm) passwordForm.reset();
+                }
+            });
+        }
+
+        function closePasswordModal() {
+            if (passwordModal) {
+                passwordModal.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+        }
+
+        if (closePasswordBtn) closePasswordBtn.addEventListener('click', closePasswordModal);
+        if (closePasswordBtn2) closePasswordBtn2.addEventListener('click', closePasswordModal);
+        if (passwordModal) {
+            passwordModal.addEventListener('click', function(e) {
+                if (e.target === passwordModal) closePasswordModal();
+            });
+        }
+
+        if (passwordForm) {
+            passwordForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                var currentPassword = document.getElementById('currentPassword').value;
+                var newPassword = document.getElementById('newPassword').value;
+                var confirmPassword = document.getElementById('confirmPassword').value;
+
+                if (newPassword !== confirmPassword) {
+                    showToast('New password and confirmation do not match.', 'error');
+                    return;
+                }
+                if (newPassword.length < 8) {
+                    showToast('New password must be at least 8 characters.', 'error');
+                    return;
+                }
+
+                var submitBtn = passwordForm.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Updating...';
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'change_password');
+                formData.append('current_password', currentPassword);
+                formData.append('new_password', newPassword);
+                formData.append('confirm_password', confirmPassword);
+
+                fetch(window.location.href, { method: 'POST', body: formData })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showToast(data.message || 'Password updated successfully.', 'success');
+                            closePasswordModal();
+                        } else {
+                            showToast(data.message || 'Failed to update password.', 'error');
+                        }
+                    })
+                    .catch(function() {
+                        showToast('An error occurred. Please try again.', 'error');
+                    })
+                    .finally(function() {
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = '<i class="fa-solid fa-check"></i> Update Password';
+                        }
+                    });
+            });
+        }
+
+        // ===== AVATAR UPLOAD =====
+        var avatarEditable = document.getElementById('avatarEditable');
+        var avatarInput = document.getElementById('avatarInput');
+        var avatarImgWrap = document.getElementById('avatarImgWrap');
+
+        if (avatarEditable && avatarInput) {
+            avatarEditable.addEventListener('click', function() {
+                avatarInput.click();
+            });
+
+            avatarInput.addEventListener('change', function() {
+                var file = avatarInput.files[0];
+                if (!file) return;
+
+                if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+                    showToast('Only JPG, PNG, WEBP or GIF images are allowed.', 'error');
+                    return;
+                }
+                if (file.size > 2 * 1024 * 1024) {
+                    showToast('Image must be smaller than 2MB.', 'error');
+                    return;
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'update_avatar');
+                formData.append('avatar', file);
+
+                fetch(window.location.href, { method: 'POST', body: formData })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showToast('Profile picture updated.', 'success');
+                            if (avatarImgWrap && data.path) {
+                                avatarImgWrap.className = 'avatar-img';
+                                avatarImgWrap.innerHTML = '<img src="' + data.path + '?t=' + Date.now() + '" alt="Profile photo" id="avatarImg" />';
+                            }
+                        } else {
+                            showToast(data.message || 'Failed to update profile picture.', 'error');
+                        }
+                    })
+                    .catch(function() {
+                        showToast('An error occurred while uploading. Please try again.', 'error');
+                    });
+            });
+        }
+    </script>
 </body>
 </html>

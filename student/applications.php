@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/student_notifications.php'; // provides getStudentNotifications, etc.
 
 checkAccess('student');
 ensureInternshipTables($pdo);
@@ -28,6 +29,39 @@ function getUserProfilePicture($pdo, $user_id) {
 // Check if student has committed to a job
 $committedJob = getStudentCommittedJob($pdo, $studentId);
 $hasCommittedJob = (bool)$committedJob;
+
+// ===== NOTIFICATION FUNCTIONS (fallback if not in student_notifications.php) =====
+if (!function_exists('getStudentNotificationMessage')) {
+    function getStudentNotificationMessage($notif) {
+        return $notif['message'] ?? 'Notification';
+    }
+}
+if (!function_exists('getStudentNotificationSource')) {
+    function getStudentNotificationSource($notif) {
+        if (!empty($notif['firstname']) && !empty($notif['lastname'])) {
+            return trim($notif['firstname'] . ' ' . $notif['lastname']);
+        }
+        return 'System';
+    }
+}
+if (!function_exists('timeAgo')) {
+    function timeAgo($dateStr) {
+        if (!$dateStr) return '';
+        $date = new DateTime($dateStr);
+        $now = new DateTime();
+        $diff = $now->getTimestamp() - $date->getTimestamp();
+        if ($diff < 60) return 'Just now';
+        if ($diff < 3600) return floor($diff / 60) . 'm ago';
+        if ($diff < 86400) return floor($diff / 3600) . 'h ago';
+        if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+        if ($diff < 2592000) return floor($diff / 604800) . 'w ago';
+        return $date->format('M j, Y');
+    }
+}
+
+// Load notifications
+$notifications = getStudentNotifications($pdo, $studentId, 10, 0);
+$unreadCount = getStudentUnreadNotificationCount($pdo, $studentId);
 
 // Handle commit action
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'commit_application') {
@@ -99,9 +133,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 
-// Handle AJAX requests for password change and avatar update
+// Handle AJAX requests for notifications, password, avatar
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+    
+    // Notification actions
+    if ($_POST['action'] === 'get_notifications') {
+        $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+        $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+        $notifs = getStudentNotifications($pdo, $studentId, $limit, $offset);
+        $unread = getStudentUnreadNotificationCount($pdo, $studentId);
+        echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $unread]);
+        exit;
+    }
+    
+    if ($_POST['action'] === 'mark_read') {
+        $notificationId = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+        $result = markStudentNotificationRead($pdo, $notificationId, $studentId);
+        $unread = getStudentUnreadNotificationCount($pdo, $studentId);
+        echo json_encode(['success' => $result, 'unread_count' => $unread]);
+        exit;
+    }
+    
+    if ($_POST['action'] === 'mark_all_read') {
+        $result = markStudentAllNotificationsRead($pdo, $studentId);
+        $unread = getStudentUnreadNotificationCount($pdo, $studentId);
+        echo json_encode(['success' => $result, 'unread_count' => $unread]);
+        exit;
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {
@@ -229,14 +288,8 @@ $applicationData = [];
 foreach ($myApplications as $application) {
     $supervisorName = trim(($application['supervisor_firstname'] ?? '') . ' ' . ($application['supervisor_middlename'] ?? '') . ' ' . ($application['supervisor_lastname'] ?? '') . ' ' . ($application['supervisor_suffix'] ?? ''));
     
-    // Students can only commit if:
-    // 1. Application status is 'accepted'
-    // 2. They haven't committed to ANY job yet
-    // 3. OR this specific application is already committed (to show as committed)
     $isThisApplicationCommitted = ($application['status'] === 'committed');
     $canCommit = $application['status'] === 'accepted' && $committedApplicationId === null;
-    
-    // If this application is already committed, keep it as committable (for display purposes)
     if ($isThisApplicationCommitted) {
         $canCommit = true;
     }
@@ -268,9 +321,17 @@ function getApplicationStatusBadgeClass($status)
         'rejected' => 'badge-danger',
         'withdrawn' => 'badge-dark',
     ];
-
     return $map[$status] ?? 'badge-secondary';
 }
+
+// ===== PAGINATION SETUP =====
+$currentPage = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($currentPage < 1) $currentPage = 1;
+$limit = 10; // items per page
+$offset = ($currentPage - 1) * $limit;
+$totalApplications = count($myApplications);
+$totalPages = max(1, ceil($totalApplications / $limit)); // Ensure at least 1 page
+$paginatedApplications = array_slice($myApplications, $offset, $limit);
 
 // Current profile picture
 $profilePicture = getUserProfilePicture($pdo, $studentId);
@@ -599,6 +660,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             color: #003300;
         }
 
+        /* ===== NOTIFICATION BELL & DROPDOWN ===== */
+        .notif-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+
         .notif-bell {
             position: relative;
             font-size: 1.3rem;
@@ -629,50 +696,225 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             color: #fff;
             font-size: 0.6rem;
             font-weight: 700;
-            width: 20px;
+            min-width: 20px;
             height: 20px;
             border-radius: 0;
             display: flex;
             align-items: center;
             justify-content: center;
             border: 2px solid #003300;
+            padding: 0 4px;
+        }
+
+        .notif-badge.hidden {
+            display: none;
+        }
+
+        /* Notification Dropdown */
+        .notif-dropdown {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            width: 380px;
+            max-height: 420px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            display: none;
+            z-index: 1000;
+            overflow: hidden;
+            border-radius: 0;
+        }
+
+        .notif-dropdown.active {
+            display: block;
+            animation: slideDown 0.2s ease;
+        }
+
+        @keyframes slideDown {
+            0% {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .notif-dropdown-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid #edf2f7;
+            background: #f8fafc;
+        }
+
+        .notif-dropdown-header h3 {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0;
+        }
+
+        .notif-dropdown-header .mark-all-read {
+            background: none;
+            border: none;
+            color: #2563eb;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 4px 8px;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .notif-dropdown-header .mark-all-read:hover {
+            text-decoration: underline;
+        }
+
+        .notif-list {
+            max-height: 320px;
+            overflow-y: auto;
+            padding: 0;
+        }
+
+        .notif-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid #f1f5f9;
+            cursor: pointer;
+            transition: background 0.15s;
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .notif-item:last-child {
+            border-bottom: none;
+        }
+
+        .notif-item:hover {
+            background: #f8fafc;
+        }
+
+        .notif-item.unread {
+            background: #eff6ff;
+            border-left: 3px solid #2563eb;
+        }
+
+        .notif-item .notif-avatar {
+            width: 32px;
+            height: 32px;
+            flex-shrink: 0;
+            background: #e2e8f0;
+            border-radius: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.7rem;
+            color: #475569;
+            overflow: hidden;
+        }
+
+        .notif-item .notif-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .notif-item .notif-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .notif-item .notif-content .notif-title {
+            font-weight: 600;
+            font-size: 0.82rem;
+            color: #0f172a;
+            margin-bottom: 2px;
+        }
+
+        .notif-item .notif-content .notif-message {
+            font-size: 0.78rem;
+            color: #64748b;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .notif-item .notif-content .notif-time {
+            font-size: 0.65rem;
+            color: #94a3b8;
+            margin-top: 3px;
+            display: block;
+        }
+
+        .notif-empty {
+            padding: 32px 16px;
+            text-align: center;
+            color: #94a3b8;
+        }
+
+        .notif-empty i {
+            font-size: 2rem;
+            display: block;
+            margin-bottom: 8px;
+            color: #cbd5e1;
+        }
+
+        .notif-empty p {
+            font-size: 0.9rem;
         }
 
         /* ---- Page card (sharp, bordered) ---- */
         .page-card {
             background: #ffffff;
             border: 1px solid #e2e8f0;
-            padding: 24px 28px 32px;
+            padding: 20px 24px 28px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
             flex: 1;
             border-radius: 0;
         }
 
-        .page-head {
+        /* ---- Section Header ---- */
+        .section-header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
+            align-items: center;
             flex-wrap: wrap;
-            gap: 16px;
-            margin-bottom: 24px;
+            gap: 12px;
+            margin-bottom: 16px;
         }
 
-        .page-head h2 {
-            font-size: 1.3rem;
+        .section-header h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #0f172a;
             display: flex;
             align-items: center;
             gap: 10px;
-            color: #0f172a;
         }
 
-        .page-head h2 i {
+        .section-header h2 i {
             color: #3b82f6;
         }
 
-        .page-head p {
-            color: #64748b;
-            font-size: 0.9rem;
-            margin-top: 2px;
+        .badge-count {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 12px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #475569;
+            border-radius: 0;
         }
 
         .notice-pill {
@@ -715,35 +957,37 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             color: #eab308;
         }
 
-        /* ---- Table (sharp) ---- */
+        /* ---- Table (sharp, compact) ---- */
         .table-wrap {
             overflow-x: auto;
             background: #fff;
             border: 1px solid #e2e8f0;
             box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
+            min-height: 320px;
         }
 
         .app-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.9rem;
+            font-size: 0.82rem;
         }
 
         .app-table th {
             background: #f8fafc;
             color: #1e293b;
             font-weight: 600;
-            padding: 14px 16px;
+            padding: 8px 10px;
             text-align: left;
             border-bottom: 1px solid #e2e8f0;
-            font-size: 0.8rem;
+            font-size: 0.68rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
+            white-space: nowrap;
         }
 
         .app-table td {
-            padding: 14px 16px;
+            padding: 7px 10px;
             border-bottom: 1px solid #f1f5f9;
             vertical-align: middle;
         }
@@ -758,8 +1002,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .app-table .muted {
             color: #94a3b8;
-            font-size: 0.8rem;
-            margin-top: 2px;
+            font-size: 0.7rem;
+            margin-top: 1px;
         }
 
         .status-badge {
@@ -808,15 +1052,15 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         }
 
         .btn-action {
-            padding: 6px 16px;
+            padding: 4px 14px;
             border-radius: 0;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.15s;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             border: 1px solid transparent;
         }
@@ -870,6 +1114,57 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .empty-state p {
             font-size: 1rem;
+        }
+
+        /* ===== PAGINATION ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: 12px;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
         }
 
         /* ===== MODAL STYLES (sharp) ===== */
@@ -1172,8 +1467,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         /* ---- Responsive ---- */
         @media (max-width: 1024px) {
-            .page-head {
+            .section-header {
                 flex-direction: column;
+                align-items: stretch;
             }
             .notice-pill {
                 white-space: normal;
@@ -1253,8 +1549,14 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 font-size: 0.8rem;
             }
 
-            .notif-bell {
+            .notif-wrapper {
                 align-self: center;
+            }
+
+            .notif-dropdown {
+                width: 300px;
+                right: -10px;
+                left: auto;
             }
 
             .page-card {
@@ -1263,8 +1565,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
             .app-table th,
             .app-table td {
-                padding: 10px 12px;
-                font-size: 0.8rem;
+                padding: 6px 8px;
+                font-size: 0.72rem;
             }
 
             .modal-container {
@@ -1274,16 +1576,27 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
 
             .btn-action {
-                font-size: 0.65rem;
-                padding: 4px 10px;
+                font-size: 0.6rem;
+                padding: 3px 8px;
             }
 
             .detail-grid {
                 grid-template-columns: 1fr;
             }
 
-            .page-head h2 {
-                font-size: 1.1rem;
+            .section-header h2 {
+                font-size: 1rem;
+            }
+
+            .pagination-wrapper {
+                justify-content: center;
+            }
+
+            .pagination-wrapper .page-info {
+                width: 100%;
+                text-align: center;
+                margin-right: 0;
+                margin-bottom: 8px;
             }
         }
 
@@ -1299,13 +1612,13 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
             .app-table th,
             .app-table td {
-                padding: 8px 6px;
-                font-size: 0.7rem;
+                padding: 4px 6px;
+                font-size: 0.65rem;
             }
 
             .btn-action {
-                font-size: 0.6rem;
-                padding: 3px 6px;
+                font-size: 0.55rem;
+                padding: 2px 6px;
             }
 
             .status-badge {
@@ -1326,6 +1639,30 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .modal-footer .btn-secondary {
                 width: 100%;
                 justify-content: center;
+            }
+
+            .notif-dropdown {
+                width: 280px;
+                right: -5px;
+                left: auto;
+            }
+
+            .pagination-wrapper .page-link {
+                padding: 2px 8px;
+                font-size: 0.7rem;
+                min-width: 28px;
+            }
+        }
+
+        @media (max-width: 400px) {
+            .notif-dropdown {
+                width: calc(100% - 20px);
+                right: 10px;
+                left: 10px;
+                max-height: 360px;
+            }
+            .notif-list {
+                max-height: 280px;
             }
         }
     </style>
@@ -1395,32 +1732,78 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <div class="header-right">
                     <!-- Header Navigation -->
                     <nav class="header-nav">
-                        <a class="nav-item-header" href="dashboard.php"></i> Dashboard</a>
-                       
+                        <a class="nav-item-header" href="dashboard.php">Dashboard</a>
                         <?php if (!$hasCommittedJob): ?>
-                            <a class="nav-item-header" href="apply.php"></i> Apply Job</a>
+                            <a class="nav-item-header" href="apply.php">Apply Job</a>
                         <?php endif; ?>
-                         <a class="nav-item-header active" href="applications.php"></i> My Applications</a>
+                        <a class="nav-item-header active" href="applications.php">My Applications</a>
                         <?php if ($hasCommittedJob): ?>
-                            <a class="nav-item-header" href="dpr.php"></i> Daily Progress Report</a>
+                            <a class="nav-item-header" href="dpr.php">Daily Progress Report</a>
                         <?php endif; ?>
                     </nav>
 
-                    <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
+                    <!-- Notification bell with dropdown (inline, same as dpr.php) -->
+                    <div class="notif-wrapper">
+                        <button class="notif-bell" id="notifBell" aria-label="Notifications">
+                            <i class="fa-regular fa-bell"></i>
+                            <span class="notif-badge <?php echo $unreadCount > 0 ? '' : 'hidden'; ?>" id="notifBadge">
+                                <?php echo $unreadCount > 0 ? $unreadCount : ''; ?>
+                            </span>
+                        </button>
+
+                        <div class="notif-dropdown" id="notifDropdown">
+                            <div class="notif-dropdown-header">
+                                <h3>Notifications</h3>
+                                <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                            </div>
+                            <div class="notif-list" id="notifList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notif): ?>
+                                        <?php
+                                            $messageText = getStudentNotificationMessage($notif);
+                                            $source = getStudentNotificationSource($notif);
+                                        ?>
+                                        <a href="<?php echo htmlspecialchars($notif['link'] ?? '#'); ?>"
+                                           class="notif-item <?php echo $notif['is_read'] ? '' : 'unread'; ?>"
+                                           data-id="<?php echo $notif['id']; ?>"
+                                           onclick="handleNotificationClick(event, <?php echo $notif['id']; ?>, '<?php echo htmlspecialchars($notif['link'] ?? '#'); ?>')">
+                                            <div class="notif-avatar">
+                                                <?php if (!empty($notif['profile_picture'])): ?>
+                                                    <img src="<?php echo htmlspecialchars($avatarPublicPath . $notif['profile_picture']); ?>" alt="Avatar">
+                                                <?php else: ?>
+                                                    <?php 
+                                                        $initials = strtoupper(substr($notif['firstname'] ?? 'U', 0, 1) . substr($notif['lastname'] ?? 'N', 0, 1));
+                                                        echo htmlspecialchars($initials ?: 'UN');
+                                                    ?>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div class="notif-content">
+                                                <div class="notif-title"><?php echo htmlspecialchars($notif['title'] ?? 'Notification'); ?></div>
+                                                <div class="notif-message"><?php echo htmlspecialchars($messageText); ?></div>
+                                                <span class="notif-time"><?php echo htmlspecialchars($source); ?> - <?php echo htmlspecialchars(timeAgo($notif['created_at'] ?? '')); ?></span>
+                                            </div>
+                                        </a>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="notif-empty">
+                                        <i class="fa-regular fa-bell-slash"></i>
+                                        <p>No notifications yet</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
             <!-- PAGE CARD -->
             <div class="page-card">
-                <div class="page-head">
-                    <div>
-                        <h2><i class="fa-regular fa-folder-open"></i> Submitted Applications</h2>
-                        <p>Review your submitted applications, open the details modal, and commit to one accepted job only.</p>
-                    </div>
+                <div class="section-header">
+                    <h2>
+                        <i class="fa-regular fa-folder-open"></i> 
+                        Submitted Applications 
+                        <span class="badge-count"><?php echo $totalApplications; ?></span>
+                    </h2>
                     <?php if ($committedApplicationId): ?>
                         <div class="notice-pill">
                             <i class="fa-solid fa-circle-check"></i>
@@ -1429,15 +1812,15 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     <?php endif; ?>
                 </div>
 
-                <?php if (count($myApplications) > 0): ?>
-                    <div class="table-wrap">
-                        <div class="table-header-reminder">
-                            <div class="reminder-text">
-                                <i class="fa-solid fa-lightbulb"></i>
-                                Note: You can only commit if the supervisor accepts your application
-                            </div>
+                <?php if ($totalApplications > 0): ?>
+                    <div class="table-header-reminder">
+                        <div class="reminder-text">
+                            <i class="fa-solid fa-lightbulb"></i>
+                            Note: You can only commit if the supervisor accepts your application
                         </div>
+                    </div>
 
+                    <div class="table-wrap">
                         <table class="app-table">
                             <thead>
                                 <tr>
@@ -1451,7 +1834,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach ($myApplications as $application): ?>
+                                <?php foreach ($paginatedApplications as $application): ?>
                                     <?php $app = $applicationData[$application['application_id']]; ?>
                                     <tr>
                                         <td><strong><?php echo htmlspecialchars($app['job_title']); ?></strong></td>
@@ -1496,12 +1879,60 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             </tbody>
                         </table>
                     </div>
+
                 <?php else: ?>
                     <div class="empty-state">
                         <i class="fa-regular fa-folder-open"></i>
                         <p>No applications found yet.</p>
                     </div>
                 <?php endif; ?>
+
+                <!-- ===== PAGINATION (ALWAYS VISIBLE) ===== -->
+                <div class="pagination-wrapper">
+                    <span class="page-info">
+                        <?php if ($totalApplications > 0): ?>
+                            Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $limit, $totalApplications); ?> of <?php echo $totalApplications; ?>
+                        <?php else: ?>
+                            No applications to display
+                        <?php endif; ?>
+                    </span>
+                    <?php
+                    // Previous link
+                    if ($currentPage > 1) {
+                        echo '<a href="?page=' . ($currentPage - 1) . '" class="page-link">Prev</a>';
+                    } else {
+                        echo '<span class="page-link disabled">Prev</span>';
+                    }
+
+                    // Page numbers (always show at least page 1)
+                    if ($totalPages > 1) {
+                        $start = max(1, $currentPage - 2);
+                        $end = min($totalPages, $currentPage + 2);
+                        if ($start > 1) {
+                            echo '<a href="?page=1" class="page-link">1</a>';
+                            if ($start > 2) echo '<span class="page-link disabled">…</span>';
+                        }
+                        for ($i = $start; $i <= $end; $i++) {
+                            $active = ($i == $currentPage) ? 'active' : '';
+                            echo '<a href="?page=' . $i . '" class="page-link ' . $active . '">' . $i . '</a>';
+                        }
+                        if ($end < $totalPages) {
+                            if ($end < $totalPages - 1) echo '<span class="page-link disabled">…</span>';
+                            echo '<a href="?page=' . $totalPages . '" class="page-link">' . $totalPages . '</a>';
+                        }
+                    } else {
+                        // Show page 1 when only one page or no items
+                        echo '<a href="?page=1" class="page-link active">1</a>';
+                    }
+
+                    // Next link
+                    if ($currentPage < $totalPages) {
+                        echo '<a href="?page=' . ($currentPage + 1) . '" class="page-link">Next</a>';
+                    } else {
+                        echo '<span class="page-link disabled">Next</span>';
+                    }
+                    ?>
+                </div>
             </div>
         </main>
     </div>
@@ -1865,8 +2296,211 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 if (sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
+                // Also close notification dropdown if open
+                const dropdown = document.getElementById('notifDropdown');
+                if (dropdown && dropdown.classList.contains('active')) {
+                    dropdown.classList.remove('active');
+                }
             }
         });
+
+        // ===== NOTIFICATION FUNCTIONS (same as dpr.php) =====
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notifDropdown');
+            if (dropdown.classList.contains('active')) {
+                dropdown.classList.remove('active');
+            } else {
+                dropdown.classList.add('active');
+                loadNotifications();
+            }
+        }
+
+        function loadNotifications() {
+            const formData = new FormData();
+            formData.append('action', 'get_notifications');
+            formData.append('limit', '20');
+            formData.append('offset', '0');
+
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    renderNotifications(data.notifications, data.unread_count);
+                    updateBadge(data.unread_count);
+                }
+            })
+            .catch(error => console.error('Error loading notifications:', error));
+        }
+
+        function renderNotifications(notifications, unreadCount) {
+            const list = document.getElementById('notifList');
+            if (!notifications || notifications.length === 0) {
+                list.innerHTML = `
+                    <div class="notif-empty">
+                        <i class="fa-regular fa-bell-slash"></i>
+                        <p>No notifications yet</p>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            notifications.forEach(notif => {
+                const isUnread = notif.is_read == 0;
+                const link = notif.link || '#';
+                const avatarUrl = notif.profile_picture ? '<?php echo $avatarPublicPath; ?>' + notif.profile_picture : '';
+                const initials = notif.firstname && notif.lastname ? 
+                    (notif.firstname.charAt(0) + notif.lastname.charAt(0)).toUpperCase() : 'UN';
+
+                html += `
+                    <a href="${link}" 
+                       class="notif-item ${isUnread ? 'unread' : ''}"
+                       data-id="${notif.id}"
+                       onclick="handleNotificationClick(event, ${notif.id}, '${link}')">
+                        <div class="notif-avatar">
+                            ${avatarUrl ? `<img src="${avatarUrl}" alt="Avatar">` : initials}
+                        </div>
+                        <div class="notif-content">
+                            <div class="notif-title">${escapeHtml(notif.title || 'Notification')}</div>
+                            <div class="notif-message">${escapeHtml(notif.message || '')}</div>
+                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${timeAgo(notif.created_at)}</span>
+                        </div>
+                    </a>
+                `;
+            });
+
+            list.innerHTML = html;
+            updateBadge(unreadCount);
+        }
+
+        function updateBadge(count) {
+            const badge = document.getElementById('notifBadge');
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        function handleNotificationClick(event, notificationId, link) {
+            event.preventDefault();
+            const item = event.currentTarget;
+            item.classList.remove('unread');
+            markNotificationRead(notificationId, function() {
+                if (link && link !== '#') {
+                    window.location.href = link;
+                } else {
+                    document.getElementById('notifDropdown').classList.remove('active');
+                }
+            });
+        }
+
+        function markNotificationRead(notificationId, callback) {
+            const formData = new FormData();
+            formData.append('action', 'mark_read');
+            formData.append('notification_id', notificationId);
+
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateBadge(data.unread_count);
+                    const item = document.querySelector(`.notif-item[data-id="${notificationId}"]`);
+                    if (item) item.classList.remove('unread');
+                    if (callback) callback();
+                }
+            })
+            .catch(error => {
+                console.error('Error marking notification as read:', error);
+                if (callback) callback();
+            });
+        }
+
+        function markAllNotificationsRead() {
+            const formData = new FormData();
+            formData.append('action', 'mark_all_read');
+
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateBadge(0);
+                    document.querySelectorAll('.notif-item.unread').forEach(item => {
+                        item.classList.remove('unread');
+                    });
+                    showToast('All notifications marked as read', 'success');
+                }
+            })
+            .catch(error => console.error('Error marking all as read:', error));
+        }
+
+        function timeAgo(dateStr) {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+            if (diff < 60) return 'Just now';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+            if (diff < 2592000) return Math.floor(diff / 604800) + 'w ago';
+            return date.toLocaleDateString();
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ===== NOTIFICATION EVENT LISTENERS =====
+        document.getElementById('notifBell').addEventListener('click', function(e) {
+            e.stopPropagation();
+            toggleNotifications();
+        });
+
+        document.addEventListener('click', function(e) {
+            const wrapper = document.querySelector('.notif-wrapper');
+            if (wrapper && !wrapper.contains(e.target)) {
+                document.getElementById('notifDropdown').classList.remove('active');
+            }
+        });
+
+        document.getElementById('markAllRead').addEventListener('click', function(e) {
+            e.stopPropagation();
+            markAllNotificationsRead();
+        });
+
+        // Poll every 30 seconds
+        setInterval(function() {
+            const formData = new FormData();
+            formData.append('action', 'get_notifications');
+            formData.append('limit', '1');
+            formData.append('offset', '0');
+
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateBadge(data.unread_count);
+                }
+            })
+            .catch(error => console.error('Error checking notifications:', error));
+        }, 30000);
     </script>
 </body>
 </html>

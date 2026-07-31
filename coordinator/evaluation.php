@@ -11,6 +11,12 @@ $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Coordinator';
 $role = getUserRole();
 $userId = getUserId();
 
+// Initialize notifications
+require_once __DIR__ . '/../includes/coordinator_notifications.php';
+checkAndCreateCoordinatorNotifications($pdo, $userId);
+$unreadCount = getCoordinatorUnreadNotificationCount($pdo, $userId);
+$notificationsList = getCoordinatorNotifications($pdo, $userId, 10, 0);
+
 // ===== PROFILE PICTURE SETTINGS =====
 $avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
 $avatarPublicPath = '../assets/uploads/avatars/';
@@ -28,6 +34,38 @@ function getUserProfilePicture($pdo, $user_id) {
 // Handle AJAX requests for password change and avatar update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+    
+    // Handle notification actions first
+    if (in_array($_POST['action'], ['get_notifications', 'mark_read', 'mark_all_read'])) {
+        $action = $_POST['action'];
+        
+        if ($action === 'get_notifications') {
+            $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+            $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+            $notifs = getCoordinatorNotifications($pdo, $userId, $limit, $offset);
+            $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+            echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $count]);
+            exit;
+        }
+        
+        if ($action === 'mark_read') {
+            $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+            if ($notification_id > 0) {
+                $result = markCoordinatorNotificationRead($pdo, $notification_id, $userId);
+                $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+                echo json_encode(['success' => $result, 'unread_count' => $count]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
+            }
+            exit;
+        }
+        
+        if ($action === 'mark_all_read') {
+            $result = markCoordinatorAllNotificationsRead($pdo, $userId);
+            echo json_encode(['success' => $result, 'unread_count' => 0]);
+            exit;
+        }
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {
@@ -543,6 +581,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
             flex: 1;
             border-radius: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 500px;
         }
 
         .page-header {
@@ -572,16 +613,16 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         /* ---- Loading Spinner ---- */
         .loading-spinner {
             text-align: center;
-            padding: 40px 20px;
+            padding: 60px 20px;
             color: #64748b;
         }
 
         .loading-spinner i {
-            font-size: 2rem;
-            color: #3b82f6;
+            font-size: 2.5rem;
+            color: #FFCC33;
             animation: spin 1s linear infinite;
             display: block;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
 
         @keyframes spin {
@@ -590,7 +631,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         }
 
         .loading-spinner p {
-            font-size: 0.9rem;
+            font-size: 0.95rem;
         }
 
         /* ---- Notice Banner ---- */
@@ -612,13 +653,15 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             color: #d97706;
         }
 
-        /* ---- Table (compressed) ---- */
-        .table-container {
+        /* ---- Table (compressed) - matches intern.php style ---- */
+        .table-wrap {
             overflow-x: auto;
             background: #fff;
             border: 1px solid #e2e8f0;
             box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
+            min-height: 320px;
+            flex: 1;
         }
 
         .summary-table {
@@ -631,17 +674,17 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #f8fafc;
             color: #1e293b;
             font-weight: 600;
-            padding: 8px 10px;
+            padding: 10px 12px;
             text-align: left;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 0.68rem;
+            border-bottom: 2px solid #e2e8f0;
+            font-size: 0.7rem;
             text-transform: uppercase;
-            letter-spacing: 0.3px;
+            letter-spacing: 0.4px;
             white-space: nowrap;
         }
 
         .summary-table td {
-            padding: 7px 10px;
+            padding: 9px 12px;
             border-bottom: 1px solid #f1f5f9;
             vertical-align: middle;
         }
@@ -654,9 +697,21 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #fafcff;
         }
 
-        /* ---- Detail View ---- */
+        .student-name {
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 0.85rem;
+        }
+
+        .muted-text {
+            color: #94a3b8;
+            font-size: 0.78rem;
+        }
+
+        /* ---- Detail View Table (matches intern.php detail style) ---- */
         .view-container {
             display: none;
+            flex: 1;
         }
 
         .view-container.active {
@@ -739,7 +794,14 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             border-radius: 0;
         }
 
-        /* ---- Detail Table ---- */
+        .detail-table-wrap {
+            overflow-x: auto;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
+            border-radius: 0;
+        }
+
         .detail-table {
             width: 100%;
             border-collapse: collapse;
@@ -750,17 +812,17 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #f8fafc;
             color: #1e293b;
             font-weight: 600;
-            padding: 8px 10px;
+            padding: 10px 12px;
             text-align: left;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 0.68rem;
+            border-bottom: 2px solid #e2e8f0;
+            font-size: 0.7rem;
             text-transform: uppercase;
-            letter-spacing: 0.3px;
+            letter-spacing: 0.4px;
             white-space: nowrap;
         }
 
         .detail-table td {
-            padding: 7px 10px;
+            padding: 9px 12px;
             border-bottom: 1px solid #f1f5f9;
             vertical-align: middle;
         }
@@ -953,12 +1015,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         /* ---- Empty State ---- */
         .empty-state {
             text-align: center;
-            padding: 40px 20px;
+            padding: 60px 20px;
             color: #94a3b8;
         }
 
         .empty-state i {
-            font-size: 2.5rem;
+            font-size: 3rem;
             display: block;
             margin-bottom: 12px;
             color: #cbd5e1;
@@ -1192,6 +1254,58 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #e9edf4;
         }
 
+        /* ===== PAGINATION (bottom right - edge of page) ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+            width: 100%;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: auto;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
         .sidebar-overlay {
             display: none;
             position: fixed;
@@ -1205,6 +1319,54 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .sidebar-overlay.show {
             display: block;
+        }
+
+        /* ===== PASSWORD MODAL ===== */
+        #passwordModal .modal-card {
+            max-width: 480px;
+        }
+
+        #passwordModal .form-group {
+            margin-bottom: 14px;
+        }
+
+        #passwordModal .form-group label {
+            display: block;
+            font-weight: 600;
+            font-size: 0.82rem;
+            color: #1e293b;
+            margin-bottom: 4px;
+        }
+
+        #passwordModal .form-group label i {
+            margin-right: 6px;
+            color: #64748b;
+        }
+
+        #passwordModal .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #d1d9e6;
+            border-radius: 0;
+            font-size: 0.9rem;
+            background: #fafcff;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        #passwordModal .form-group input:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        #passwordModal .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 16px;
         }
 
         /* ---- Responsive ---- */
@@ -1222,6 +1384,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
             .student-info-card .sep {
                 display: none;
+            }
+            .page-card {
+                min-height: 400px;
             }
         }
 
@@ -1289,6 +1454,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
             .page-card {
                 padding: 14px;
+                min-height: 350px;
             }
 
             .page-header h2 {
@@ -1351,6 +1517,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 font-size: 0.65rem;
                 padding: 2px 8px;
             }
+
+            .table-wrap {
+                min-height: 250px;
+            }
         }
 
         @media (max-width: 480px) {
@@ -1394,54 +1564,21 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 font-size: 0.75rem;
                 padding: 8px 12px;
             }
-        }
 
-        /* ===== PASSWORD MODAL ===== */
-        #passwordModal .modal-card {
-            max-width: 480px;
-        }
+            .page-card {
+                min-height: 300px;
+                padding: 10px;
+            }
 
-        #passwordModal .form-group {
-            margin-bottom: 14px;
-        }
+            .table-wrap {
+                min-height: 200px;
+            }
 
-        #passwordModal .form-group label {
-            display: block;
-            font-weight: 600;
-            font-size: 0.82rem;
-            color: #1e293b;
-            margin-bottom: 4px;
-        }
-
-        #passwordModal .form-group label i {
-            margin-right: 6px;
-            color: #64748b;
-        }
-
-        #passwordModal .form-group input {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #d1d9e6;
-            border-radius: 0;
-            font-size: 0.9rem;
-            background: #fafcff;
-            transition: 0.15s;
-            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-        }
-
-        #passwordModal .form-group input:focus {
-            outline: 2px solid #2563eb;
-            outline-offset: 2px;
-            border-color: transparent;
-        }
-
-        #passwordModal .modal-actions {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-            margin-top: 20px;
-            border-top: 1px solid #edf2f7;
-            padding-top: 16px;
+            .pagination-wrapper .page-link {
+                padding: 2px 8px;
+                font-size: 0.7rem;
+                min-width: 28px;
+            }
         }
     </style>
 </head>
@@ -1519,10 +1656,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     </nav>
 
                     <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
+                    <?php 
+                    require_once __DIR__ . '/notification_component.php';
+                    renderNotificationBell($unreadCount, $notificationsList);
+                    ?>
                 </div>
             </div>
 
@@ -1533,15 +1670,49 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     <p>Identifies contradictions between supervisor scores and feedback sentiment to flag potential evaluation inconsistencies.</p>
                 </div>
 
-                <div id="discrepancyTable">
-                    <!-- Loading spinner -->
-                    <div id="loadingSpinner" class="loading-spinner" style="display: none;">
-                        <i class="fa-solid fa-spinner fa-spin"></i>
-                        <p>Analyzing evaluations and sentiment...</p>
+                <!-- Loading spinner -->
+                <div id="loadingSpinner" class="loading-spinner" style="display: flex;">
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                    <p>Analyzing evaluations and sentiment...</p>
+                </div>
+
+                <!-- Results container -->
+                <div id="resultsContainer" style="display: none; flex: 1; display: flex; flex-direction: column;">
+                    <!-- Summary Table -->
+                    <div id="summaryContainer" class="summary-container">
+                        <div class="table-wrap">
+                            <table class="summary-table">
+                                <thead>
+                                    <tr>
+                                        <th>Student Name</th>
+                                        <th>Company</th>
+                                        <th>Supervisor</th>
+                                        <th>Job</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="summaryTableBody">
+                                    <tr>
+                                        <td colspan="5" style="text-align:center;padding:40px;color:#94a3b8;">
+                                            <i class="fa-regular fa-smile" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>
+                                            Loading evaluations...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
 
-                    <!-- Results will be loaded here -->
-                    <div id="resultsContainer"></div>
+                    <!-- Detail View -->
+                    <div id="detailContainer" class="view-container"></div>
+                </div>
+
+                <!-- ===== PAGINATION (Always Visible) ===== -->
+                <div class="pagination-wrapper" id="paginationWrapper">
+                    <span class="page-info" id="pageInfo">Loading...</span>
+                    <a href="#" class="page-link disabled" id="prevPage">Prev</a>
+                    <span id="pageNumbers"></span>
+                    <a href="#" class="page-link disabled" id="nextPage">Next</a>
                 </div>
             </div>
         </main>
@@ -1628,6 +1799,11 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         let allEvaluations = [];
         let allGroupedStudents = [];
         let currentStudentId = null;
+
+        // ===== PAGINATION VARIABLES =====
+        let currentPage = 1;
+        const itemsPerPage = 10;
+        let filteredStudents = [];
 
         // ===== TOAST =====
         function showToast(message, type = 'success') {
@@ -1885,15 +2061,18 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
             currentStudentId = studentId;
 
-            document.getElementById('summaryContainer').classList.add('hidden');
+            document.getElementById('summaryContainer').style.display = 'none';
             document.getElementById('detailContainer').classList.add('active');
+            document.getElementById('paginationWrapper').style.display = 'none';
             renderDetailView(student);
         }
 
         function backToSummary() {
             document.getElementById('detailContainer').classList.remove('active');
-            document.getElementById('summaryContainer').classList.remove('hidden');
+            document.getElementById('summaryContainer').style.display = 'block';
+            document.getElementById('paginationWrapper').style.display = 'flex';
             currentStudentId = null;
+            renderPage(currentPage);
         }
 
         function renderDetailView(student) {
@@ -1915,7 +2094,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <span class="eval-badge"><i class="fa-regular fa-file-lines"></i> ${student.evaluations.length} eval${student.evaluations.length > 1 ? 's' : ''}</span>
                     </div>
                 </div>
-                <div class="table-container">
+                <div class="detail-table-wrap">
                     <table class="detail-table">
                         <thead>
                             <tr>
@@ -1968,10 +2147,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             }
                         </td>
                         <td>
-                            <span class="flag-indicator ${evalItem.discrepancy_flag.type}" 
-                                  title="${escapeHtml(evalItem.discrepancy_flag.message)}">
-                                ${getFlagIcon(evalItem.discrepancy_flag.type)}
-                                ${getFlagLabel(evalItem.discrepancy_flag.type)}
+                            <span class="flag-indicator ${evalItem.discrepancy_flag ? evalItem.discrepancy_flag.type : 'no-analysis'}" 
+                                  title="${escapeHtml(evalItem.discrepancy_flag ? evalItem.discrepancy_flag.message : 'No analysis available')}">
+                                ${evalItem.discrepancy_flag ? getFlagIcon(evalItem.discrepancy_flag.type) : '❓'}
+                                ${evalItem.discrepancy_flag ? getFlagLabel(evalItem.discrepancy_flag.type) : 'No Analysis'}
                             </span>
                         </td>
                     </tr>
@@ -1999,8 +2178,16 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             const resultsContainer = document.getElementById('resultsContainer');
             
             try {
-                loadingSpinner.style.display = 'block';
-                resultsContainer.innerHTML = '';
+                loadingSpinner.style.display = 'flex';
+                resultsContainer.style.display = 'none';
+                
+                // Show pagination with loading state
+                const paginationWrapper = document.getElementById('paginationWrapper');
+                paginationWrapper.style.display = 'flex';
+                document.getElementById('pageInfo').textContent = 'Loading...';
+                document.getElementById('prevPage').className = 'page-link disabled';
+                document.getElementById('nextPage').className = 'page-link disabled';
+                document.getElementById('pageNumbers').innerHTML = '';
                 
                 const response = await fetch(window.location.href, {
                     method: 'POST',
@@ -2021,6 +2208,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 displayError('Failed to load evaluation data. Please try again.');
             } finally {
                 loadingSpinner.style.display = 'none';
+                resultsContainer.style.display = 'flex';
             }
         }
 
@@ -2067,6 +2255,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             
             const groupedByStudent = groupByStudent(evaluations);
             allGroupedStudents = groupedByStudent;
+            filteredStudents = groupedByStudent;
             displayResults(groupedByStudent, !sentimentServiceAvailable);
         }
 
@@ -2186,20 +2375,103 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             return 'neutral';
         }
 
-        function displayResults(groupedStudents, usingFallback) {
-            const resultsContainer = document.getElementById('resultsContainer');
-            let html = '';
-            if(usingFallback) {
-                html += `<div class="notice-banner"><i class="fa-solid fa-exclamation-triangle"></i> <strong>Notice:</strong> Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.</div>`;
+        // ===== PAGINATION FUNCTIONS =====
+        function renderPage(page) {
+            currentPage = page;
+            const totalItems = filteredStudents.length;
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            
+            // Always show pagination wrapper
+            const paginationWrapper = document.getElementById('paginationWrapper');
+            paginationWrapper.style.display = 'flex';
+            
+            if (totalItems === 0) {
+                // Update pagination for empty state
+                document.getElementById('pageInfo').textContent = 'Showing 0–0 of 0';
+                document.getElementById('prevPage').className = 'page-link disabled';
+                document.getElementById('nextPage').className = 'page-link disabled';
+                document.getElementById('pageNumbers').innerHTML = '';
+                return;
             }
-            groupedStudents.sort((a,b)=>a.student_name.localeCompare(b.student_name));
-            html += `<div id="summaryContainer" class="summary-container"><div class="table-container"><table class="summary-table"><thead><tr><th>Student Name</th><th>Company</th><th>Supervisor</th><th>Job</th><th>Action</th></tr></thead><tbody>`;
-            if(groupedStudents.length===0) {
-                html += `<tr><td colspan="5" style="text-align:center;padding:30px;color:#64748b;"><i class="fa-regular fa-smile" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>No students with evaluations found.</td></tr>`;
+            
+            const start = (page - 1) * itemsPerPage;
+            const end = Math.min(start + itemsPerPage, totalItems);
+            const pageItems = filteredStudents.slice(start, end);
+            
+            // Update page info
+            document.getElementById('pageInfo').textContent = 
+                `Showing ${totalItems > 0 ? start + 1 : 0}–${end} of ${totalItems}`;
+            
+            // Render the table with current page items
+            renderTableRows(pageItems);
+            
+            // Update pagination controls
+            const prevLink = document.getElementById('prevPage');
+            const nextLink = document.getElementById('nextPage');
+            const pageNumbers = document.getElementById('pageNumbers');
+            
+            prevLink.className = 'page-link' + (page <= 1 ? ' disabled' : '');
+            prevLink.href = '#';
+            prevLink.onclick = function(e) {
+                e.preventDefault();
+                if (page > 1) renderPage(page - 1);
+            };
+            
+            nextLink.className = 'page-link' + (page >= totalPages ? ' disabled' : '');
+            nextLink.href = '#';
+            nextLink.onclick = function(e) {
+                e.preventDefault();
+                if (page < totalPages) renderPage(page + 1);
+            };
+            
+            // Generate page number links
+            let pageHtml = '';
+            const maxVisible = 5;
+            let startPage = Math.max(1, page - Math.floor(maxVisible / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+            
+            if (endPage - startPage < maxVisible - 1) {
+                startPage = Math.max(1, endPage - maxVisible + 1);
+            }
+            
+            if (startPage > 1) {
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderPage(1)">1</a>`;
+                if (startPage > 2) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+            }
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageHtml += `<a href="#" class="page-link${i === page ? ' active' : ''}" onclick="event.preventDefault(); renderPage(${i})">${i}</a>`;
+            }
+            
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderPage(${totalPages})">${totalPages}</a>`;
+            }
+            
+            pageNumbers.innerHTML = pageHtml;
+        }
+
+        function renderTableRows(students) {
+            const tbody = document.getElementById('summaryTableBody');
+            if (!tbody) return;
+            
+            let html = '';
+            
+            if (students.length === 0) {
+                html = `<tr>
+                    <td colspan="5" style="text-align:center;padding:40px;color:#94a3b8;">
+                        <i class="fa-regular fa-smile" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>
+                        No students with evaluations found on this page.
+                    </td>
+                </tr>`;
             } else {
-                groupedStudents.forEach(student => {
+                students.forEach(student => {
                     html += `<tr>
-                        <td><strong>${escapeHtml(student.student_name)}</strong></td>
+                        <td><span class="student-name">${escapeHtml(student.student_name)}</span></td>
                         <td>${escapeHtml(student.company_name)}</td>
                         <td>${escapeHtml(student.supervisor_name)}</td>
                         <td>${escapeHtml(student.job_title)}</td>
@@ -2207,9 +2479,54 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     </tr>`;
                 });
             }
-            html += `</tbody></table></div></div>`;
-            html += `<div id="detailContainer" class="view-container"></div>`;
-            resultsContainer.innerHTML = html;
+            
+            tbody.innerHTML = html;
+        }
+
+        function displayResults(groupedStudents, usingFallback) {
+            const resultsContainer = document.getElementById('resultsContainer');
+            
+            // Show results container
+            resultsContainer.style.display = 'flex';
+            
+            // Add notice banner if using fallback
+            const existingBanner = document.querySelector('.notice-banner');
+            if (usingFallback && !existingBanner) {
+                const banner = document.createElement('div');
+                banner.className = 'notice-banner';
+                banner.innerHTML = `<i class="fa-solid fa-exclamation-triangle"></i> <strong>Notice:</strong> Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.`;
+                resultsContainer.insertBefore(banner, resultsContainer.firstChild);
+            } else if (!usingFallback && existingBanner) {
+                existingBanner.remove();
+            }
+            
+            // Store filtered students and render first page
+            filteredStudents = groupedStudents.sort((a,b) => a.student_name.localeCompare(b.student_name));
+            
+            // Show pagination
+            const paginationWrapper = document.getElementById('paginationWrapper');
+            paginationWrapper.style.display = 'flex';
+            
+            if (filteredStudents.length > 0) {
+                renderPage(1);
+            } else {
+                // Show empty state
+                const tbody = document.getElementById('summaryTableBody');
+                if (tbody) {
+                    tbody.innerHTML = `<tr>
+                        <td colspan="5" style="text-align:center;padding:40px;color:#94a3b8;">
+                            <i class="fa-regular fa-smile" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>
+                            No students with evaluations found.
+                        </td>
+                    </tr>`;
+                }
+                
+                // Update pagination for empty state
+                document.getElementById('pageInfo').textContent = 'Showing 0–0 of 0';
+                document.getElementById('prevPage').className = 'page-link disabled';
+                document.getElementById('nextPage').className = 'page-link disabled';
+                document.getElementById('pageNumbers').innerHTML = '';
+            }
         }
 
         function getScoreClass(score) {
@@ -2223,21 +2540,65 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         }
 
         function getFlagIcon(type) {
-            const map = { 'high-mismatch':'🚨','moderate-mismatch':'⚠️','no-mismatch':'✅','no-feedback':'ℹ️' };
+            const map = { 'high-mismatch':'🚨','moderate-mismatch':'⚠️','no-mismatch':'✅','no-feedback':'ℹ️', 'no-analysis':'❓' };
             return map[type] || '❓';
         }
 
         function getFlagLabel(type) {
-            const map = { 'high-mismatch':'High Mismatch','moderate-mismatch':'Moderate Mismatch','no-mismatch':'Aligned','no-feedback':'No Feedback' };
+            const map = { 'high-mismatch':'High Mismatch','moderate-mismatch':'Moderate Mismatch','no-mismatch':'Aligned','no-feedback':'No Feedback', 'no-analysis':'No Analysis' };
             return map[type] || 'No Analysis';
         }
 
         function displayEmptyState() {
-            document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><i class="fa-solid fa-chart-line"></i><h3>No Evaluations Found</h3><p>There are no supervisor evaluations available for analysis.</p></div>`;
+            const resultsContainer = document.getElementById('resultsContainer');
+            resultsContainer.style.display = 'flex';
+            
+            const tbody = document.getElementById('summaryTableBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr>
+                    <td colspan="5" style="text-align:center;padding:40px;color:#94a3b8;">
+                        <i class="fa-regular fa-smile" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>
+                        No students with evaluations found.
+                    </td>
+                </tr>`;
+            }
+            
+            // Show pagination with empty state
+            const paginationWrapper = document.getElementById('paginationWrapper');
+            paginationWrapper.style.display = 'flex';
+            document.getElementById('pageInfo').textContent = 'Showing 0–0 of 0';
+            document.getElementById('prevPage').className = 'page-link disabled';
+            document.getElementById('nextPage').className = 'page-link disabled';
+            document.getElementById('pageNumbers').innerHTML = '';
         }
 
         function displayError(message) {
-            document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><i class="fa-solid fa-exclamation-triangle" style="color:#ef4444;"></i><h3>Error</h3><p>${message}</p><button class="btn-retry" onclick="loadEvaluationData()"><i class="fa-solid fa-rotate"></i> Try Again</button></div>`;
+            const resultsContainer = document.getElementById('resultsContainer');
+            resultsContainer.style.display = 'flex';
+            
+            const tbody = document.getElementById('summaryTableBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr>
+                    <td colspan="5" style="text-align:center;padding:40px;">
+                        <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+                            <i class="fa-solid fa-exclamation-triangle" style="font-size:2rem;color:#ef4444;"></i>
+                            <span style="color:#1e293b;font-weight:600;">Error</span>
+                            <span style="color:#64748b;font-size:0.9rem;">${message}</span>
+                            <button class="btn-retry" onclick="loadEvaluationData()" style="margin-top:4px;">
+                                <i class="fa-solid fa-rotate"></i> Try Again
+                            </button>
+                        </div>
+                    </td>
+                </tr>`;
+            }
+            
+            // Show pagination with error state
+            const paginationWrapper = document.getElementById('paginationWrapper');
+            paginationWrapper.style.display = 'flex';
+            document.getElementById('pageInfo').textContent = 'Error loading data';
+            document.getElementById('prevPage').className = 'page-link disabled';
+            document.getElementById('nextPage').className = 'page-link disabled';
+            document.getElementById('pageNumbers').innerHTML = '';
         }
 
         function escapeHtml(text) {
@@ -2267,5 +2628,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         });
     </script>
+
+    <?php renderNotificationScript(); ?>
 </body>
 </html>

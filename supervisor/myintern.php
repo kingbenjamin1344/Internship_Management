@@ -5,8 +5,6 @@ require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/supervisor_notifications.php';
 
-
-
 // Check if user is supervisor
 checkAccess('supervisor');
 ensureInternshipTables($pdo);
@@ -30,10 +28,6 @@ function getUserProfilePicture($pdo, $user_id) {
 }
 
 // ===== NOTIFICATION FUNCTIONS =====
-
-/**
- * Get unread notifications count for supervisor
- */
 function getUnreadNotificationCount($pdo, $supervisor_id) {
     try {
         $stmt = $pdo->prepare("
@@ -48,9 +42,6 @@ function getUnreadNotificationCount($pdo, $supervisor_id) {
     }
 }
 
-/**
- * Get notifications for supervisor with pagination
- */
 function getNotifications($pdo, $supervisor_id, $limit = 20, $offset = 0) {
     try {
         $stmt = $pdo->prepare("
@@ -65,7 +56,10 @@ function getNotifications($pdo, $supervisor_id, $limit = 20, $offset = 0) {
             ORDER BY n.created_at DESC
             LIMIT ? OFFSET ?
         ");
-        $stmt->execute([$supervisor_id, $limit, $offset]);
+        $stmt->bindValue(1, $supervisor_id, PDO::PARAM_INT);
+        $stmt->bindValue(2, $limit, PDO::PARAM_INT);
+        $stmt->bindValue(3, $offset, PDO::PARAM_INT);
+        $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (PDOException $e) {
         error_log("Get notifications error: " . $e->getMessage());
@@ -73,9 +67,6 @@ function getNotifications($pdo, $supervisor_id, $limit = 20, $offset = 0) {
     }
 }
 
-/**
- * Mark notification as read
- */
 function markNotificationRead($pdo, $notification_id, $supervisor_id) {
     try {
         $stmt = $pdo->prepare("
@@ -90,9 +81,6 @@ function markNotificationRead($pdo, $notification_id, $supervisor_id) {
     }
 }
 
-/**
- * Mark all notifications as read
- */
 function markAllNotificationsRead($pdo, $supervisor_id) {
     try {
         $stmt = $pdo->prepare("
@@ -107,9 +95,6 @@ function markAllNotificationsRead($pdo, $supervisor_id) {
     }
 }
 
-/**
- * Create notification for supervisor
- */
 function createNotification($pdo, $user_id, $sender_id, $type, $title, $message, $link = null) {
     try {
         $stmt = $pdo->prepare("
@@ -124,13 +109,8 @@ function createNotification($pdo, $user_id, $sender_id, $type, $title, $message,
 }
 
 // ===== SCORING ANALYTICS FUNCTIONS =====
-
-/**
- * Calculate cohort average score for a given company/job
- */
 function getCohortAverage($pdo, $student_id, $company_id = null) {
     try {
-        // Get the student's company if not provided
         if (!$company_id) {
             $stmt = $pdo->prepare("
                 SELECT c.id 
@@ -147,7 +127,6 @@ function getCohortAverage($pdo, $student_id, $company_id = null) {
             $company_id = $company['id'];
         }
         
-        // Get all evaluated DPRs for students in this company
         $stmt = $pdo->prepare("
             SELECT 
                 d.score,
@@ -170,12 +149,10 @@ function getCohortAverage($pdo, $student_id, $company_id = null) {
         
         if (empty($allScores)) return null;
         
-        // Calculate cohort statistics
         $scores = array_column($allScores, 'score');
         $avg = array_sum($scores) / count($scores);
         $stddev = calculateStdDev($scores, $avg);
         
-        // Get student's own scores for comparison
         $stmt = $pdo->prepare("
             SELECT score, evaluated_at, id
             FROM dpr_entries 
@@ -199,9 +176,6 @@ function getCohortAverage($pdo, $student_id, $company_id = null) {
     }
 }
 
-/**
- * Calculate standard deviation
- */
 function calculateStdDev($scores, $mean = null) {
     if (empty($scores)) return 0;
     if ($mean === null) {
@@ -214,9 +188,6 @@ function calculateStdDev($scores, $mean = null) {
     return sqrt($variance / count($scores));
 }
 
-/**
- * Detect extreme score drops
- */
 function detectScoreDrops($pdo, $student_id, $company_id = null) {
     $cohortData = getCohortAverage($pdo, $student_id, $company_id);
     if (!$cohortData || empty($cohortData['student_scores'])) {
@@ -228,20 +199,14 @@ function detectScoreDrops($pdo, $student_id, $company_id = null) {
     $cohortAvg = $cohortData['cohort_avg'];
     $cohortStdDev = $cohortData['cohort_stddev'];
     
-    // Check for significant drops between consecutive scores
     for ($i = 0; $i < count($studentScores) - 1; $i++) {
         $current = $studentScores[$i]['score'];
         $previous = $studentScores[$i + 1]['score'];
         $drop = $previous - $current;
         
-        // Calculate drop significance
         $dropPercentage = ($drop / $previous) * 100;
         $zScore = ($current - $cohortAvg) / ($cohortStdDev > 0 ? $cohortStdDev : 1);
         
-        // Flag if:
-        // 1. Drop is more than 20% from previous score
-        // 2. Score is more than 1.5 standard deviations below cohort average
-        // 3. Score is below 70% (failing threshold) while previous was above 85%
         $isSignificant = false;
         $reason = [];
         
@@ -280,9 +245,6 @@ function detectScoreDrops($pdo, $student_id, $company_id = null) {
     return $drops;
 }
 
-/**
- * Determine drop severity
- */
 function getDropSeverity($dropPercentage, $zScore, $currentScore) {
     if ($dropPercentage > 40 || abs($zScore) > 3 || $currentScore < 60) {
         return 'critical';
@@ -295,9 +257,6 @@ function getDropSeverity($dropPercentage, $zScore, $currentScore) {
     }
 }
 
-/**
- * Get cohort performance summary
- */
 function getCohortPerformanceSummary($pdo, $student_id) {
     $cohortData = getCohortAverage($pdo, $student_id);
     if (!$cohortData) return null;
@@ -305,15 +264,13 @@ function getCohortPerformanceSummary($pdo, $student_id) {
     $allScores = $cohortData['all_scores'];
     $studentScores = $cohortData['student_scores'];
     
-    // Calculate student's average
     $studentAvg = !empty($studentScores) ? array_sum(array_column($studentScores, 'score')) / count($studentScores) : 0;
     
-    // Performance categories
     $categories = [
-        'excellent' => 0,  // 90-100
-        'good' => 0,       // 75-89
-        'satisfactory' => 0, // 60-74
-        'needs_improvement' => 0, // <60
+        'excellent' => 0,
+        'good' => 0,
+        'satisfactory' => 0,
+        'needs_improvement' => 0,
     ];
     
     foreach ($allScores as $score) {
@@ -352,12 +309,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$student_id]);
             $dprEntries = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            // Get cohort performance data (still calculated but not displayed)
             $cohortData = getCohortAverage($pdo, $student_id);
             $scoreDrops = detectScoreDrops($pdo, $student_id);
             $performanceSummary = getCohortPerformanceSummary($pdo, $student_id);
             
-            // Format dates for display
             foreach ($dprEntries as &$entry) {
                 $entry['date_formatted'] = date('d M Y', strtotime($entry['date']));
                 $entry['time_in_formatted'] = $entry['time_in'] ? date('h:i A', strtotime($entry['time_in'])) : '—';
@@ -392,7 +347,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     if ($dpr_id > 0 && $score !== null && $score >= 1 && $score <= 100) {
         try {
-            // Check if this DPR belongs to a student under this supervisor
             $checkStmt = $pdo->prepare("
                 SELECT d.id, d.student_id 
                 FROM dpr_entries d
@@ -410,7 +364,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 exit;
             }
             
-            // Check if already evaluated
             $checkEvalStmt = $pdo->prepare("SELECT evaluated_at FROM dpr_entries WHERE id = ?");
             $checkEvalStmt->execute([$dpr_id]);
             $existing = $checkEvalStmt->fetch();
@@ -420,7 +373,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 exit;
             }
             
-            // Update the DPR
             $stmt = $pdo->prepare("
                 UPDATE dpr_entries 
                 SET score = ?, supervisor_feedback = ?, evaluated_at = NOW()
@@ -428,7 +380,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ");
             $stmt->execute([$score, $supervisor_feedback, $dpr_id]);
             
-            // Mark notification as read when DPR is evaluated
             $notifStmt = $pdo->prepare("
                 UPDATE notifications 
                 SET is_read = 1 
@@ -436,7 +387,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ");
             $notifStmt->execute([$userId, '%dpr_id=' . $dpr_id . '%']);
             
-            // Check for score drops after evaluation
             $scoreDrops = detectScoreDrops($pdo, $dprInfo['student_id']);
             $hasExtremeDrop = false;
             $dropMessage = '';
@@ -467,7 +417,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
     
-    // Change password
     if ($_POST['action'] === 'change_password') {
         $currentPassword = $_POST['current_password'] ?? '';
         $newPassword = $_POST['new_password'] ?? '';
@@ -507,11 +456,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
-    // Update profile picture
     if ($_POST['action'] === 'update_avatar' && isset($_FILES['avatar'])) {
         $file = $_FILES['avatar'];
         $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-        $maxSize = 2 * 1024 * 1024; // 2MB
+        $maxSize = 2 * 1024 * 1024;
 
         if ($file['error'] !== UPLOAD_ERR_OK) {
             echo json_encode(['success' => false, 'message' => 'Upload failed. Please try again.']);
@@ -553,7 +501,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
-    // Get notifications
     if ($_POST['action'] === 'get_notifications') {
         $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
         $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
@@ -570,13 +517,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
-    // Mark notification as read
     if ($_POST['action'] === 'mark_read') {
         $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
         
         if ($notification_id > 0) {
-$result = markSupervisorNotificationRead($pdo, $notification_id, $userId);
-        $unreadCount = getSupervisorUnreadNotificationCount($pdo, $userId);
+            $result = markSupervisorNotificationRead($pdo, $notification_id, $userId);
+            $unreadCount = getSupervisorUnreadNotificationCount($pdo, $userId);
             
             echo json_encode([
                 'success' => $result,
@@ -588,7 +534,6 @@ $result = markSupervisorNotificationRead($pdo, $notification_id, $userId);
         exit;
     }
 
-    // Mark all notifications as read
     if ($_POST['action'] === 'mark_all_read') {
         $result = markSupervisorAllNotificationsRead($pdo, $userId);
         echo json_encode([
@@ -603,6 +548,29 @@ $result = markSupervisorNotificationRead($pdo, $notification_id, $userId);
 $unreadCount = getUnreadNotificationCount($pdo, $userId);
 $notifications = getNotifications($pdo, $userId, 10, 0);
 
+// ===== PAGINATION SETUP FOR INTERNS =====
+$currentPage = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($currentPage < 1) $currentPage = 1;
+$limit = 10; // items per page
+$offset = ($currentPage - 1) * $limit;
+
+// Get total count of committed interns
+$countSql = '
+    SELECT COUNT(DISTINCT a.student_id)
+    FROM job_applications a
+    INNER JOIN users s ON a.student_id = s.id
+    INNER JOIN jobs j ON a.job_id = j.id
+    INNER JOIN companies c ON j.company_id = c.id
+    WHERE a.status = "committed" AND (c.supervisor_id = ? OR j.created_by = ?)
+';
+$countStmt = $pdo->prepare($countSql);
+$countStmt->bindValue(1, $userId, PDO::PARAM_INT);
+$countStmt->bindValue(2, $userId, PDO::PARAM_INT);
+$countStmt->execute();
+$totalInterns = $countStmt->fetchColumn();
+$totalPages = ceil($totalInterns / $limit);
+
+// Fetch interns for current page with pagination
 $acceptedSql = '
     SELECT
         a.id AS application_id,
@@ -628,14 +596,18 @@ $acceptedSql = '
     LEFT JOIN users sp ON sp.id = IFNULL(c.supervisor_id, j.created_by)
     WHERE a.status = "committed" AND (c.supervisor_id = ? OR j.created_by = ?)
     ORDER BY a.updated_at DESC
+    LIMIT ? OFFSET ?
 ';
 
-$acceptedParams = [$userId, $userId];
 $acceptedStmt = $pdo->prepare($acceptedSql);
-$acceptedStmt->execute($acceptedParams);
+$acceptedStmt->bindValue(1, $userId, PDO::PARAM_INT);
+$acceptedStmt->bindValue(2, $userId, PDO::PARAM_INT);
+$acceptedStmt->bindValue(3, $limit, PDO::PARAM_INT);
+$acceptedStmt->bindValue(4, $offset, PDO::PARAM_INT);
+$acceptedStmt->execute();
 $acceptedInterns = $acceptedStmt->fetchAll();
 
-// Pre-calculate analytics for each intern for dashboard display (keep drop warnings on intern list)
+// Pre-calculate analytics for each intern for dashboard display
 $internAnalytics = [];
 foreach ($acceptedInterns as $intern) {
     $scoreDrops = detectScoreDrops($pdo, $intern['student_id']);
@@ -666,7 +638,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         /* ============================================================
            Dark Green (#003300) & Golden Yellow (#FFCC33) theme
            Sharp card edges, no rounded corners.
-           Header spans full width, flush with top.
            ============================================================ */
         * {
             box-sizing: border-box;
@@ -685,7 +656,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             min-height: 100vh;
         }
 
-        /* ---- Dark Green Sidebar (now a profile panel) ---- */
+        /* ---- Dark Green Sidebar ---- */
         .sidebar {
             width: 250px;
             background: #003300;
@@ -867,7 +838,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             flex-direction: column;
         }
 
-        /* ---- Dark Green Top Header (full width, flush) ---- */
+        /* ---- Dark Green Top Header ---- */
         .top-header {
             display: flex;
             justify-content: space-between;
@@ -923,7 +894,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             padding: 4px 8px;
         }
 
-        /* ---- Header right with navigation ---- */
+        /* ---- Header right ---- */
         .header-right {
             display: flex;
             align-items: center;
@@ -976,7 +947,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             color: #003300;
         }
 
-        /* ===== NOTIFICATION BELL & DROPDOWN ===== */
+        /* ---- Notification Bell ---- */
         .notif-wrapper {
             position: relative;
             display: inline-block;
@@ -1026,7 +997,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             display: none;
         }
 
-        /* Notification Dropdown */
         .notif-dropdown {
             position: absolute;
             top: calc(100% + 8px);
@@ -1188,7 +1158,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             font-size: 0.9rem;
         }
 
-        /* ---- Page card (sharp, bordered) ---- */
+        /* ---- Page card ---- */
         .page-card {
             background: #ffffff;
             border: 1px solid #e2e8f0;
@@ -1255,99 +1225,116 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             display: none;
         }
 
-        /* ---- Loading Spinner ---- */
-        .loading-spinner {
-            display: none;
-            text-align: center;
-            padding: 40px 20px;
-            color: #64748b;
-        }
-
-        .loading-spinner.show {
-            display: block;
-        }
-
-        .loading-spinner i {
-            font-size: 2rem;
-            color: #3b82f6;
-            animation: spin 1s linear infinite;
-            display: block;
-            margin-bottom: 12px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* ---- Intern List ---- */
-        .intern-list.hidden {
-            display: none;
-        }
-
+        /* ---- Table Design (matching admin) ---- */
         .table-wrap {
             overflow-x: auto;
             background: #fff;
             border: 1px solid #e2e8f0;
             box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
+            min-height: 320px;
         }
 
-        .intern-table {
+        .intern-table,
+        .dpr-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.9rem;
+            font-size: 0.82rem;
         }
 
-        .intern-table th {
+        .intern-table th,
+        .dpr-table th {
             background: #f8fafc;
             color: #1e293b;
             font-weight: 600;
-            padding: 14px 16px;
+            padding: 8px 10px;
             text-align: left;
             border-bottom: 1px solid #e2e8f0;
-            font-size: 0.8rem;
+            font-size: 0.68rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
+            white-space: nowrap;
         }
 
-        .intern-table td {
-            padding: 14px 16px;
+        .intern-table td,
+        .dpr-table td {
+            padding: 7px 10px;
             border-bottom: 1px solid #f1f5f9;
             vertical-align: middle;
         }
 
-        .intern-table tbody tr:last-child td {
+        .intern-table tbody tr:last-child td,
+        .dpr-table tbody tr:last-child td {
             border-bottom: none;
         }
 
-        .intern-table tbody tr:hover {
+        .intern-table tbody tr:hover,
+        .dpr-table tbody tr:hover {
             background: #fafcff;
         }
 
+        .intern-table tbody tr:nth-child(even),
+        .dpr-table tbody tr:nth-child(even) {
+            background: #fafcff;
+        }
+
+        .intern-table tbody tr:nth-child(even):hover,
+        .dpr-table tbody tr:nth-child(even):hover {
+            background: #f0f4ff;
+        }
+
+        /* ---- Status Chips ---- */
         .status-chip {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 4px 14px;
+            padding: 2px 10px;
             background: #dcfce7;
             color: #166534;
             border: 1px solid #86efac;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 600;
             border-radius: 0;
         }
 
         .status-chip i {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
         }
 
+        .badge-status {
+            padding: 2px 10px;
+            border-radius: 0;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-block;
+            border: 1px solid transparent;
+        }
+
+        .badge-status.in-progress {
+            background: #fef9c3;
+            color: #854d0e;
+            border-color: #facc15;
+        }
+
+        .badge-status.completed {
+            background: #dcfce7;
+            color: #166534;
+            border-color: #86efac;
+        }
+
+        .badge-status.pending {
+            background: #f1f5f9;
+            color: #475569;
+            border-color: #cbd5e1;
+        }
+
+        /* ---- Drop Warning ---- */
         .drop-warning {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 2px 10px;
-            font-size: 0.7rem;
+            padding: 2px 8px;
+            font-size: 0.65rem;
             font-weight: 600;
             border-radius: 0;
             margin-left: 6px;
@@ -1365,16 +1352,17 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             border: 1px solid #facc15;
         }
 
+        /* ---- Action Buttons ---- */
         .view-dpr-btn {
-            padding: 6px 16px;
+            padding: 4px 12px;
             border-radius: 0;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.15s;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             border: 1px solid transparent;
             background: #dbeafe;
@@ -1387,113 +1375,16 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             transform: scale(1.02);
         }
 
-        /* ---- DPR View ---- */
-        .dpr-view.hidden {
-            display: none;
-        }
-
-        .dpr-table-wrap {
-            overflow-x: auto;
-            background: #fff;
-            border: 1px solid #e2e8f0;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
-            border-radius: 0;
-        }
-
-        .dpr-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-
-        .dpr-table th {
-            background: #f8fafc;
-            color: #1e293b;
-            font-weight: 600;
-            padding: 14px 16px;
-            text-align: left;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-        }
-
-        .dpr-table td {
-            padding: 14px 16px;
-            border-bottom: 1px solid #f1f5f9;
-            vertical-align: middle;
-        }
-
-        .dpr-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-
-        .dpr-table tbody tr:hover {
-            background: #fafcff;
-        }
-
-        .dpr-empty-row td {
-            padding: 32px 16px;
-            text-align: center;
-            color: #94a3b8;
-            font-style: italic;
-        }
-
-        .dpr-empty-row td i {
-            font-size: 2rem;
-            display: block;
-            margin-bottom: 12px;
-            color: #cbd5e1;
-        }
-
-        .date-cell {
-            font-weight: 600;
-            color: #0f172a;
-        }
-
-        .score-cell {
-            font-weight: 600;
-        }
-
-        .score-value {
-            color: #059669;
-        }
-
-        .score-value.dropped {
-            color: #dc2626;
-        }
-
-        .no-score {
-            color: #94a3b8;
-        }
-
-        .score-drop-indicator {
-            display: inline-block;
-            padding: 2px 8px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            background: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fca5a5;
-            border-radius: 0;
-            margin-left: 4px;
-        }
-
-        .score-drop-indicator.down i {
-            color: #dc2626;
-        }
-
-        /* ---- Buttons ---- */
         .view-btn {
-            padding: 6px 16px;
+            padding: 4px 12px;
             border-radius: 0;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.15s;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             border: 1px solid transparent;
         }
@@ -1565,34 +1456,159 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #bbf7d0;
         }
 
-        .badge-status {
-            padding: 4px 14px;
-            border-radius: 0;
-            font-size: 0.75rem;
+        /* ---- Score Cells ---- */
+        .score-cell {
             font-weight: 600;
+        }
+
+        .score-value {
+            color: #059669;
+        }
+
+        .score-value.dropped {
+            color: #dc2626;
+        }
+
+        .no-score {
+            color: #94a3b8;
+        }
+
+        .score-drop-indicator {
             display: inline-block;
-            border: 1px solid transparent;
+            padding: 1px 6px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+            border-radius: 0;
+            margin-left: 4px;
         }
 
-        .badge-status.in-progress {
-            background: #fef9c3;
-            color: #854d0e;
-            border-color: #facc15;
+        .score-drop-indicator.down i {
+            color: #dc2626;
         }
 
-        .badge-status.completed {
-            background: #dcfce7;
-            color: #166534;
-            border-color: #86efac;
+        .date-cell {
+            font-weight: 600;
+            color: #0f172a;
         }
 
-        .badge-status.pending {
+        /* ---- Empty State ---- */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #94a3b8;
+        }
+
+        .empty-state i {
+            font-size: 3rem;
+            display: block;
+            margin-bottom: 16px;
+            color: #cbd5e1;
+        }
+
+        .empty-state p {
+            font-size: 1rem;
+        }
+
+        .dpr-empty-row td {
+            padding: 32px 16px;
+            text-align: center;
+            color: #94a3b8;
+            font-style: italic;
+        }
+
+        .dpr-empty-row td i {
+            font-size: 2rem;
+            display: block;
+            margin-bottom: 12px;
+            color: #cbd5e1;
+        }
+
+        /* ---- Loading Spinner ---- */
+        .loading-spinner {
+            display: none;
+            text-align: center;
+            padding: 40px 20px;
+            color: #64748b;
+        }
+
+        .loading-spinner.show {
+            display: block;
+        }
+
+        .loading-spinner i {
+            font-size: 2rem;
+            color: #3b82f6;
+            animation: spin 1s linear infinite;
+            display: block;
+            margin-bottom: 12px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .intern-list.hidden,
+        .dpr-view.hidden {
+            display: none;
+        }
+
+        /* ===== PAGINATION (matching admin) ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: 12px;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover:not(.disabled):not(.active) {
             background: #f1f5f9;
-            color: #475569;
             border-color: #cbd5e1;
         }
 
-        /* ===== MODAL STYLES (sharp) ===== */
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+            cursor: not-allowed;
+        }
+
+        /* ===== MODAL STYLES ===== */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -1738,6 +1754,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             cursor: not-allowed;
         }
 
+        /* ---- View Content Display ---- */
         .view-content-display {
             padding: 8px 0 4px;
         }
@@ -1792,6 +1809,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             font-style: italic;
         }
 
+        /* ---- Evaluate Form ---- */
         .evaluate-form .form-group {
             margin-bottom: 18px;
         }
@@ -1908,24 +1926,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             font-size: 1.2rem;
         }
 
-        /* ---- Empty State ---- */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: #94a3b8;
-        }
-
-        .empty-state i {
-            font-size: 3rem;
-            display: block;
-            margin-bottom: 16px;
-            color: #cbd5e1;
-        }
-
-        .empty-state p {
-            font-size: 1rem;
-        }
-
         /* ---- Sidebar Overlay ---- */
         .sidebar-overlay {
             display: none;
@@ -2033,8 +2033,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .intern-table td,
             .dpr-table th,
             .dpr-table td {
-                padding: 10px 12px;
-                font-size: 0.8rem;
+                padding: 8px 10px;
+                font-size: 0.75rem;
             }
 
             .modal-card {
@@ -2046,7 +2046,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .view-btn,
             .view-dpr-btn {
                 font-size: 0.65rem;
-                padding: 4px 10px;
+                padding: 3px 8px;
             }
 
             .view-content-display .meta-info {
@@ -2072,6 +2072,16 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 width: 100%;
                 justify-content: center;
             }
+
+            .pagination-wrapper {
+                justify-content: center;
+            }
+            
+            .pagination-wrapper .page-info {
+                margin-right: 0;
+                width: 100%;
+                text-align: center;
+            }
         }
 
         @media (max-width: 480px) {
@@ -2088,29 +2098,29 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .intern-table td,
             .dpr-table th,
             .dpr-table td {
-                padding: 8px 6px;
-                font-size: 0.7rem;
+                padding: 6px 6px;
+                font-size: 0.65rem;
             }
 
             .view-btn,
             .view-dpr-btn {
                 font-size: 0.6rem;
-                padding: 3px 6px;
+                padding: 2px 6px;
             }
 
             .status-chip {
-                font-size: 0.65rem;
-                padding: 2px 8px;
+                font-size: 0.6rem;
+                padding: 1px 6px;
             }
 
             .badge-status {
-                font-size: 0.65rem;
-                padding: 2px 8px;
+                font-size: 0.6rem;
+                padding: 1px 6px;
             }
 
             .drop-warning {
-                font-size: 0.6rem;
-                padding: 1px 6px;
+                font-size: 0.55rem;
+                padding: 1px 4px;
             }
 
             .notif-dropdown {
@@ -2118,13 +2128,15 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 right: -5px;
                 left: auto;
             }
+
+            .pagination-wrapper .page-link {
+                padding: 2px 8px;
+                font-size: 0.7rem;
+                min-width: 28px;
+            }
         }
 
-        /* ===== PASSWORD MODAL ===== */
-        #passwordModal .modal-card {
-            max-width: 480px;
-        }
-
+        /* ---- Password Modal ---- */
         #passwordModal .form-group {
             margin-bottom: 18px;
         }
@@ -2157,15 +2169,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             outline: 2px solid #2563eb;
             outline-offset: 2px;
             border-color: transparent;
-        }
-
-        #passwordModal .modal-actions {
-            display: flex;
-            gap: 12px;
-            justify-content: flex-end;
-            margin-top: 24px;
-            border-top: 1px solid #edf2f7;
-            padding-top: 22px;
         }
     </style>
 </head>
@@ -2220,7 +2223,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         <!-- MAIN CONTENT -->
         <main class="main-content">
-            <!-- HEADER: full width, dark green, flush with top -->
+            <!-- HEADER -->
             <div class="top-header">
                 <div class="header-left">
                     <button class="mobile-menu-toggle" id="menuToggle" aria-label="Toggle menu">
@@ -2233,7 +2236,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     </h1>
                 </div>
                 <div class="header-right">
-                    <!-- Header Navigation -->
                     <nav class="header-nav">
                         <a class="nav-item-header" href="dashboard.php"> Dashboard</a>
                         <a class="nav-item-header" href="job.php"> Add Job</a>
@@ -2241,7 +2243,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <a class="nav-item-header active" href="myintern.php"> My Interns</a>
                     </nav>
 
-                    <!-- Notification bell with dropdown -->
                     <div class="notif-wrapper">
                         <button class="notif-bell" id="notifBell" aria-label="Notifications">
                             <i class="fa-regular fa-bell"></i>
@@ -2250,7 +2251,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             </span>
                         </button>
 
-                        <!-- Notification Dropdown -->
                         <div class="notif-dropdown" id="notifDropdown">
                             <div class="notif-dropdown-header">
                                 <h3>Notifications</h3>
@@ -2302,6 +2302,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     <div class="left-section">
                         <h2>
                             <span id="pageTitle">My Interns</span>
+                            <span class="badge-count" style="display:inline-flex;align-items:center;padding:2px 12px;background:#f1f5f9;border:1px solid #e2e8f0;font-size:0.75rem;font-weight:600;color:#475569;border-radius:0;margin-left:8px;">
+                                <?php echo $totalInterns; ?>
+                            </span>
                         </h2>
                         <div class="toolbar-note" id="pageNote">Committed interns under your assigned companies and supervisor account.</div>
                     </div>
@@ -2322,7 +2325,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <div class="intern-list" id="internListView">
                     <?php if (count($acceptedInterns) > 0): ?>
                         <div class="table-wrap">
-                            <table class="intern-table">
+                            <table class="intern-table" id="internTable">
                                 <thead>
                                     <tr>
                                         <th>Student</th>
@@ -2334,36 +2337,48 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                         <th>Action</th>
                                     </tr>
                                 </thead>
-                                <tbody>
-                                    <?php foreach ($acceptedInterns as $intern): ?>
-                                        <?php
-                                            $studentName = trim(($intern['student_firstname'] ?? '') . ' ' . ($intern['student_middlename'] ?? '') . ' ' . ($intern['student_lastname'] ?? '') . ' ' . ($intern['student_suffix'] ?? ''));
-                                            $supervisorName = trim(($intern['supervisor_firstname'] ?? '') . ' ' . ($intern['supervisor_middlename'] ?? '') . ' ' . ($intern['supervisor_lastname'] ?? '') . ' ' . ($intern['supervisor_suffix'] ?? ''));
-                                            $studentId = $intern['student_id'];
-                                            $hasDrop = isset($internAnalytics[$studentId]) && $internAnalytics[$studentId]['has_extreme_drop'];
-                                            $dropCount = isset($internAnalytics[$studentId]) ? $internAnalytics[$studentId]['total_drops'] : 0;
-                                        ?>
-                                        <tr>
-                                            <td>
-                                                <strong><?php echo htmlspecialchars($studentName !== '' ? $studentName : 'Unnamed Student'); ?></strong>
-                                                <?php if ($hasDrop): ?>
-                                            
-                                                <?php endif; ?>
-                                            </td>
-                                            <td><?php echo htmlspecialchars($supervisorName !== '' ? $supervisorName : 'Not assigned'); ?></td>
-                                            <td><?php echo htmlspecialchars($intern['job_title'] ?? 'N/A'); ?></td>
-                                            <td><?php echo htmlspecialchars($intern['company_name'] ?? 'N/A'); ?></td>
-                                            <td><span class="status-chip"><i class="fa-solid fa-circle-check"></i> Committed</span></td>
-                                            <td><?php echo htmlspecialchars(formatDate($intern['committed_at'] ?? null)); ?></td>
-                                            <td>
-                                                <button class="view-dpr-btn" onclick="viewStudentDPR(<?php echo $intern['student_id']; ?>, '<?php echo addslashes($studentName); ?>')">
-                                                    <i class="fa-regular fa-calendar-check"></i> View DPR
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
+                                <tbody id="internTableBody">
+                                    <!-- Populated by JavaScript -->
                                 </tbody>
                             </table>
+                        </div>
+                        
+                        <!-- ===== PAGINATION ===== -->
+                        <div class="pagination-wrapper" id="internPagination">
+                            <span class="page-info" id="internPageInfo">Showing 1–10 of <?php echo $totalInterns; ?></span>
+                            <?php
+                            // Previous link
+                            if ($currentPage > 1) {
+                                echo '<a href="?page=' . ($currentPage - 1) . '" class="page-link" id="internPrevPage">Prev</a>';
+                            } else {
+                                echo '<span class="page-link disabled" id="internPrevPage">Prev</span>';
+                            }
+
+                            // Page numbers
+                            if ($totalPages > 0) {
+                                $start = max(1, $currentPage - 2);
+                                $end = min($totalPages, $currentPage + 2);
+                                if ($start > 1) {
+                                    echo '<a href="?page=1" class="page-link">1</a>';
+                                    if ($start > 2) echo '<span class="page-link disabled">…</span>';
+                                }
+                                for ($i = $start; $i <= $end; $i++) {
+                                    $active = ($i == $currentPage) ? 'active' : '';
+                                    echo '<a href="?page=' . $i . '" class="page-link ' . $active . '">' . $i . '</a>';
+                                }
+                                if ($end < $totalPages) {
+                                    if ($end < $totalPages - 1) echo '<span class="page-link disabled">…</span>';
+                                    echo '<a href="?page=' . $totalPages . '" class="page-link">' . $totalPages . '</a>';
+                                }
+                            }
+
+                            // Next link
+                            if ($currentPage < $totalPages) {
+                                echo '<a href="?page=' . ($currentPage + 1) . '" class="page-link" id="internNextPage">Next</a>';
+                            } else {
+                                echo '<span class="page-link disabled" id="internNextPage">Next</span>';
+                            }
+                            ?>
                         </div>
                     <?php else: ?>
                         <div class="empty-state">
@@ -2383,7 +2398,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                     <th>Time In</th>
                                     <th>Time Out</th>
                                     <th>Task Done</th>
-                                  
                                     <th>Score</th>
                                     <th>Status</th>
                                     <th>Action</th>
@@ -2393,6 +2407,14 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                 <!-- DPR entries will be loaded here -->
                             </tbody>
                         </table>
+                    </div>
+                    
+                    <!-- ===== DPR Pagination ===== -->
+                    <div class="pagination-wrapper" id="dprPagination" style="display: none;">
+                        <span class="page-info" id="dprPageInfo">Showing 1–10 of 0</span>
+                        <a href="#" class="page-link disabled" id="dprPrevPage">Prev</a>
+                        <span id="dprPageNumbers"></span>
+                        <a href="#" class="page-link" id="dprNextPage">Next</a>
                     </div>
                 </div>
             </div>
@@ -2530,7 +2552,19 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
     </div>
 
     <script>
-        // ----- Toast notification -----
+        // ===== DATA =====
+        const acceptedInterns = <?php echo json_encode($acceptedInterns); ?>;
+        const internAnalytics = <?php echo json_encode($internAnalytics); ?>;
+        const totalInterns = <?php echo $totalInterns; ?>;
+        const currentPage = <?php echo $currentPage; ?>;
+        const totalPages = <?php echo $totalPages; ?>;
+
+        // ===== PAGINATION VARIABLES =====
+        let dprCurrentPage = 1;
+        const itemsPerPage = 10;
+        let dprData = [];
+
+        // ===== TOAST =====
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
             const toastMessage = document.getElementById('toastMessage');
@@ -2542,27 +2576,21 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }, 4000);
         }
 
-        // ===== NOTIFICATION FUNCTIONS =====
+        document.getElementById('toast').addEventListener('click', function() {
+            this.classList.remove('show');
+        });
 
-        /**
-         * Toggle notification dropdown
-         */
+        // ===== NOTIFICATION FUNCTIONS =====
         function toggleNotifications() {
             const dropdown = document.getElementById('notifDropdown');
-            const bell = document.getElementById('notifBell');
-            
             if (dropdown.classList.contains('active')) {
                 dropdown.classList.remove('active');
             } else {
                 dropdown.classList.add('active');
-                // Load fresh notifications when opening
                 loadNotifications();
             }
         }
 
-        /**
-         * Load notifications via AJAX
-         */
         function loadNotifications() {
             const formData = new FormData();
             formData.append('action', 'get_notifications');
@@ -2585,12 +2613,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             });
         }
 
-        /**
-         * Render notifications in dropdown
-         */
         function renderNotifications(notifications, unreadCount) {
             const list = document.getElementById('notifList');
-            const badge = document.getElementById('notifBadge');
             
             if (!notifications || notifications.length === 0) {
                 list.innerHTML = `
@@ -2621,7 +2645,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <div class="notif-content">
                             <div class="notif-title">${escapeHtml(notif.title || 'Notification')}</div>
                             <div class="notif-message">${escapeHtml(notif.message || '')}</div>
-                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${escapeHtml(notif.message || '')} - ${timeAgo(notif.created_at)}</span>
+                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${timeAgo(notif.created_at)}</span>
                         </div>
                     </a>
                 `;
@@ -2631,9 +2655,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             updateBadge(unreadCount);
         }
 
-        /**
-         * Update notification badge count
-         */
         function updateBadge(count) {
             const badge = document.getElementById('notifBadge');
             if (count > 0) {
@@ -2644,29 +2665,21 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         }
 
-        /**
-         * Handle notification click
-         */
         function handleNotificationClick(event, notificationId, link) {
             event.preventDefault();
             
             const item = event.currentTarget;
             item.classList.remove('unread');
-            // Mark as read
+            
             markNotificationRead(notificationId, function() {
-                // Navigate to the link
                 if (link && link !== '#') {
                     window.location.href = link;
                 } else {
-                    // Close dropdown
                     document.getElementById('notifDropdown').classList.remove('active');
                 }
             });
         }
 
-        /**
-         * Mark a single notification as read
-         */
         function markNotificationRead(notificationId, callback) {
             const formData = new FormData();
             formData.append('action', 'mark_read');
@@ -2680,7 +2693,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .then(data => {
                 if (data.success) {
                     updateBadge(data.unread_count);
-                    // Update the UI immediately
                     const item = document.querySelector(`.notif-item[data-id="${notificationId}"]`);
                     if (item) {
                         item.classList.remove('unread');
@@ -2694,9 +2706,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             });
         }
 
-        /**
-         * Mark all notifications as read
-         */
         function markAllNotificationsRead() {
             const formData = new FormData();
             formData.append('action', 'mark_all_read');
@@ -2709,7 +2718,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .then(data => {
                 if (data.success) {
                     updateBadge(0);
-                    // Update all items in dropdown
                     document.querySelectorAll('.notif-item.unread').forEach(item => {
                         item.classList.remove('unread');
                     });
@@ -2721,12 +2729,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             });
         }
 
-        /**
-         * Get time ago string
-         */
         function timeAgo(dateStr) {
             if (!dateStr) return '';
-            
             const date = new Date(dateStr);
             const now = new Date();
             const diff = Math.floor((now - date) / 1000);
@@ -2739,9 +2743,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             return date.toLocaleDateString();
         }
 
-        /**
-         * Escape HTML for safe display
-         */
         function escapeHtml(text) {
             if (!text) return '';
             const div = document.createElement('div');
@@ -2749,18 +2750,28 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             return div.innerHTML;
         }
 
+        function escapeJs(text) {
+            if (!text) return '';
+            return String(text).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        }
+
+        function trim(str) {
+            return (str || '').trim();
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return 'N/A';
+            const d = new Date(dateStr);
+            if (isNaN(d)) return 'N/A';
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
         // ===== NOTIFICATION EVENT LISTENERS =====
-        
-        // Notification bell toggle
         document.getElementById('notifBell').addEventListener('click', function(e) {
             e.stopPropagation();
-            document.querySelectorAll('.notif-item.unread').forEach(item => item.classList.remove('unread'));
-            document.getElementById('notifBadge').classList.add('hidden');
-            document.getElementById('notifBadge').textContent = '';
             toggleNotifications();
         });
 
-        // Close dropdown on outside click
         document.addEventListener('click', function(e) {
             const wrapper = document.querySelector('.notif-wrapper');
             if (wrapper && !wrapper.contains(e.target)) {
@@ -2768,56 +2779,73 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         });
 
-        // Mark all as read
         document.getElementById('markAllRead').addEventListener('click', function(e) {
             e.stopPropagation();
             markAllNotificationsRead();
         });
 
-        // Periodically check for new notifications (every 30 seconds)
-        setInterval(function() {
-            const formData = new FormData();
-            formData.append('action', 'get_notifications');
-            formData.append('limit', '1');
-            formData.append('offset', '0');
+        // ===== RENDER INTERN TABLE =====
+        function renderInterns() {
+            const tbody = document.getElementById('internTableBody');
+            if (!tbody) return;
             
-            fetch(window.location.href, {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    updateBadge(data.unread_count);
-                }
-            })
-            .catch(error => {
-                console.error('Error checking notifications:', error);
+            if (!acceptedInterns || acceptedInterns.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="empty-state">
+                            <i class="fa-regular fa-users"></i>
+                            <p>No committed interns found under your supervision.</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            let html = '';
+            acceptedInterns.forEach(intern => {
+                const studentId = intern.student_id;
+                let studentName = trim((intern.student_firstname || '') + ' ' + (intern.student_middlename || '') + ' ' + (intern.student_lastname || '') + ' ' + (intern.student_suffix || ''));
+                let supervisorName = trim((intern.supervisor_firstname || '') + ' ' + (intern.supervisor_middlename || '') + ' ' + (intern.supervisor_lastname || '') + ' ' + (intern.supervisor_suffix || ''));
+                const hasDrop = internAnalytics[studentId] && internAnalytics[studentId].has_extreme_drop;
+                
+                html += `
+                    <tr>
+                        <td>
+                            <strong>${escapeHtml(studentName || 'Unnamed Student')}</strong>
+                            ${hasDrop ? `<span class="drop-warning extreme" title="Extreme score drop detected"><i class="fa-solid fa-triangle-exclamation"></i> Drop Alert</span>` : ''}
+                        </td>
+                        <td>${escapeHtml(supervisorName || 'Not assigned')}</td>
+                        <td>${escapeHtml(intern.job_title || 'N/A')}</td>
+                        <td>${escapeHtml(intern.company_name || 'N/A')}</td>
+                        <td><span class="status-chip"><i class="fa-solid fa-circle-check"></i> Committed</span></td>
+                        <td>${formatDate(intern.committed_at)}</td>
+                        <td>
+                            <button class="view-dpr-btn" onclick="viewStudentDPR(${studentId}, '${escapeJs(studentName)}')">
+                                <i class="fa-regular fa-calendar-check"></i> View DPR
+                            </button>
+                        </td>
+                    </tr>
+                `;
             });
-        }, 30000);
+            
+            tbody.innerHTML = html;
+        }
 
-        // ----- View Student DPR -----
+        // ===== VIEW STUDENT DPR =====
         let currentStudentName = '';
         let currentAnalytics = null;
 
         function viewStudentDPR(studentId, studentName) {
             currentStudentName = studentName;
             
-            // Show loading
             document.getElementById('loadingSpinner').classList.add('show');
             document.getElementById('dprView').classList.add('hidden');
-            
-            // Hide intern list
             document.getElementById('internListView').classList.add('hidden');
             
-            // Update page title and note
             document.getElementById('pageTitle').textContent = 'DPR: ' + studentName;
             document.getElementById('pageNote').textContent = 'Daily Progress Reports for ' + studentName;
-            
-            // Show back button
             document.getElementById('backBtn').classList.remove('hidden');
 
-            // Fetch DPR data
             const formData = new FormData();
             formData.append('action', 'get_student_dpr');
             formData.append('student_id', studentId);
@@ -2831,14 +2859,18 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 document.getElementById('loadingSpinner').classList.remove('show');
                 
                 if (data.success) {
-                    // Store analytics data (still available but not displayed)
                     currentAnalytics = data.analytics || null;
+                    dprData = data.data || [];
                     
-                    renderDPRTable(data.data, studentName);
+                    if (dprData.length > 0) {
+                        renderDprPage(1);
+                    } else {
+                        renderDPRTable([]);
+                    }
                     document.getElementById('dprView').classList.remove('hidden');
                 } else {
                     showToast(data.message || 'Failed to load DPR entries.', 'error');
-                    renderDPRTable([], studentName);
+                    renderDPRTable([]);
                     document.getElementById('dprView').classList.remove('hidden');
                 }
             })
@@ -2846,19 +2878,95 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 console.error('Error:', error);
                 document.getElementById('loadingSpinner').classList.remove('show');
                 showToast('An error occurred. Please try again.', 'error');
-                renderDPRTable([], studentName);
+                renderDPRTable([]);
                 document.getElementById('dprView').classList.remove('hidden');
             });
         }
 
-        // ----- Render DPR Table -----
-        function renderDPRTable(entries, studentName) {
+        // ===== DPR PAGINATION =====
+        function renderDprPage(page) {
+            dprCurrentPage = page;
+            const totalItems = dprData.length;
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            
+            const pagination = document.getElementById('dprPagination');
+            if (!pagination) return;
+            
+            if (totalItems === 0) {
+                pagination.style.display = 'flex';
+                document.getElementById('dprPageInfo').textContent = 'Showing 0–0 of 0';
+                document.getElementById('dprPrevPage').className = 'page-link disabled';
+                document.getElementById('dprNextPage').className = 'page-link disabled';
+                document.getElementById('dprPageNumbers').innerHTML = '';
+                renderDPRTable([]);
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            
+            const start = (page - 1) * itemsPerPage;
+            const end = Math.min(start + itemsPerPage, totalItems);
+            const pageItems = dprData.slice(start, end);
+            
+            document.getElementById('dprPageInfo').textContent = 
+                `Showing ${start + 1}–${end} of ${totalItems}`;
+            
+            renderDPRTable(pageItems);
+            
+            const prevLink = document.getElementById('dprPrevPage');
+            const nextLink = document.getElementById('dprNextPage');
+            const pageNumbers = document.getElementById('dprPageNumbers');
+            
+            prevLink.className = 'page-link' + (page <= 1 ? ' disabled' : '');
+            prevLink.onclick = function(e) {
+                e.preventDefault();
+                if (page > 1) renderDprPage(page - 1);
+            };
+            
+            nextLink.className = 'page-link' + (page >= totalPages ? ' disabled' : '');
+            nextLink.onclick = function(e) {
+                e.preventDefault();
+                if (page < totalPages) renderDprPage(page + 1);
+            };
+            
+            let pageHtml = '';
+            const maxVisible = 5;
+            let startPage = Math.max(1, page - Math.floor(maxVisible / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+            
+            if (endPage - startPage < maxVisible - 1) {
+                startPage = Math.max(1, endPage - maxVisible + 1);
+            }
+            
+            if (startPage > 1) {
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderDprPage(1)">1</a>`;
+                if (startPage > 2) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+            }
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageHtml += `<a href="#" class="page-link${i === page ? ' active' : ''}" onclick="event.preventDefault(); renderDprPage(${i})">${i}</a>`;
+            }
+            
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderDprPage(${totalPages})">${totalPages}</a>`;
+            }
+            
+            pageNumbers.innerHTML = pageHtml;
+        }
+
+        // ===== RENDER DPR TABLE =====
+        function renderDPRTable(entries) {
             const tbody = document.getElementById('dprTableBody');
             
             if (!entries || entries.length === 0) {
                 tbody.innerHTML = `
                     <tr class="dpr-empty-row">
-                        <td colspan="8">
+                        <td colspan="7">
                             <i class="fa-regular fa-calendar-circle-plus"></i>
                             No DPR entries found for this student.<br>
                             <span style="font-size:0.85rem; color:#cbd5e1;">The student hasn't submitted any progress reports yet.</span>
@@ -2868,7 +2976,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 return;
             }
 
-            // Get score drop data for this student (still calculated but displayed in table)
             const dropMap = {};
             if (currentAnalytics && currentAnalytics.score_drops) {
                 currentAnalytics.score_drops.forEach(drop => {
@@ -2877,38 +2984,30 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
 
             let html = '';
-            let previousScore = null;
             
-            entries.forEach((entry, index) => {
-                const statusClass = entry.status.toLowerCase().replace(' ', '-');
+            entries.forEach((entry) => {
+                const statusClass = entry.status ? entry.status.toLowerCase().replace(' ', '-') : 'pending';
                 const hasTask = entry.tasks && entry.tasks.trim() !== '';
-                const hasFeedback = entry.feedback && entry.feedback.trim() !== '';
                 const hasScore = entry.score !== null && entry.score !== undefined && entry.score > 0;
                 const isEvaluated = entry.evaluated_at !== null && entry.evaluated_at !== undefined;
-                const hasSupervisorFeedback = entry.supervisor_feedback && entry.supervisor_feedback.trim() !== '';
                 const timeStr = entry.time_in_formatted && entry.time_out_formatted ? 
                     entry.time_in_formatted + ' - ' + entry.time_out_formatted : 
                     (entry.time_in_formatted || '—');
                 
-                // Check if this entry has a score drop
                 const dropInfo = dropMap[entry.id];
                 const isDropped = dropInfo && dropInfo.is_extreme;
                 const dropPercent = dropInfo ? dropInfo.drop_percentage : 0;
                 
-                // Escape data for JavaScript
                 const taskText = entry.tasks || '';
                 const dateText = entry.date_formatted || entry.date || '';
-                const timeText = timeStr || '';
                 const score = entry.score || 0;
                 const supervisorFeedback = entry.supervisor_feedback || '';
                 const dprId = entry.id || 0;
                 
-                // Evaluate button text and class
                 const evaluateBtnClass = isEvaluated ? 'view-btn-evaluate evaluated' : 'view-btn-evaluate';
                 const evaluateBtnText = isEvaluated ? '<i class="fa-solid fa-eye"></i> View Evaluation' : '<i class="fa-solid fa-star"></i> Evaluate';
                 const isEvaluatedFlag = isEvaluated ? '1' : '0';
                 
-                // Score display with drop indicator
                 let scoreDisplay = '';
                 if (hasScore) {
                     let scoreClass = 'score-value';
@@ -2932,7 +3031,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <td>${escapeHtml(entry.time_out_formatted || entry.time_out || '—')}</td>
                         <td>
                             <button class="view-btn view-btn-task ${hasTask ? '' : 'no-content'}" 
-                                    onclick="viewTask('${escapeJs(taskText)}', '${escapeJs(dateText)}', '${escapeJs(studentName)}', '${escapeJs(timeText)}')"
+                                    onclick="viewTask('${escapeJs(taskText)}', '${escapeJs(dateText)}', '${escapeJs(currentStudentName)}', '${escapeJs(timeStr)}')"
                                     ${hasTask ? '' : 'disabled'}>
                                 <i class="fa-regular fa-list-check"></i>
                                 ${hasTask ? 'View Task' : 'No Task'}
@@ -2942,49 +3041,30 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <td class="score-cell">${scoreDisplay}</td>
                         <td>
                             <span class="badge-status ${statusClass}">
-                                ${escapeHtml(entry.status)}
+                                ${escapeHtml(entry.status || 'Pending')}
                             </span>
                         </td>
                         <td>
                             <button class="view-btn ${evaluateBtnClass}" 
-                                    onclick="openEvaluateModal(${dprId}, '${escapeJs(dateText)}', '${escapeJs(studentName)}', '${escapeJs(taskText)}', ${score}, '${escapeJs(supervisorFeedback)}', ${isEvaluatedFlag})">
+                                    onclick="openEvaluateModal(${dprId}, '${escapeJs(dateText)}', '${escapeJs(currentStudentName)}', '${escapeJs(taskText)}', ${score}, '${escapeJs(supervisorFeedback)}', ${isEvaluatedFlag})">
                                 ${evaluateBtnText}
                             </button>
                         </td>
                     </tr>
                 `;
-                
-                previousScore = hasScore ? score : previousScore;
             });
             
             tbody.innerHTML = html;
         }
 
-        // ----- Escape for JavaScript (to prevent breaking quotes) -----
-        function escapeJs(text) {
-            if (!text) return '';
-            return String(text).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-        }
-
-        // ----- View Task Modal -----
+        // ===== VIEW TASK MODAL =====
         function viewTask(task, date, studentName, timeStr) {
-            console.log('viewTask called', { task, date, studentName, timeStr });
-            
             const modal = document.getElementById('taskModal');
-            const taskDate = document.getElementById('taskDate');
-            const taskStudent = document.getElementById('taskStudent');
-            const taskTime = document.getElementById('taskTime');
+            document.getElementById('taskDate').textContent = date || '—';
+            document.getElementById('taskStudent').textContent = studentName || '—';
+            document.getElementById('taskTime').textContent = timeStr || '—';
+            
             const taskTextDisplay = document.getElementById('taskTextDisplay');
-            
-            if (!modal) {
-                console.error('Task modal not found!');
-                return;
-            }
-            
-            taskDate.textContent = date || '—';
-            taskStudent.textContent = studentName || '—';
-            taskTime.textContent = timeStr || '—';
-            
             if (task && task.trim() !== '') {
                 taskTextDisplay.textContent = task;
                 taskTextDisplay.className = 'content-text task-text';
@@ -2997,17 +3077,19 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             document.body.style.overflow = 'hidden';
         }
 
-        // ----- Open Evaluate Modal (No Scroll) -----
-        function openEvaluateModal(dprId, date, studentName, taskPreview, currentScore, currentFeedback, isEvaluated) {
-            console.log('openEvaluateModal called', { dprId, date, studentName, taskPreview, currentScore, currentFeedback, isEvaluated });
-            
-            const modal = document.getElementById('evaluateModal');
-            if (!modal) {
-                console.error('Evaluate modal not found!');
-                return;
+        function closeTaskModal() {
+            const modal = document.getElementById('taskModal');
+            if (modal) {
+                modal.classList.remove('active');
+                document.body.style.overflow = '';
             }
+        }
+
+        // ===== OPEN EVALUATE MODAL =====
+        function openEvaluateModal(dprId, date, studentName, taskPreview, currentScore, currentFeedback, isEvaluated) {
+            const modal = document.getElementById('evaluateModal');
+            if (!modal) return;
             
-            // Set values
             document.getElementById('evaluateDate').textContent = date || '—';
             document.getElementById('evaluateStudent').textContent = studentName || '—';
             document.getElementById('evaluateTaskPreview').textContent = taskPreview ? 
@@ -3023,7 +3105,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             const modalHint = document.getElementById('evaluateModalHint');
             const cohortAvgDisplay = document.getElementById('cohortAvgDisplay');
             
-            // Show cohort average if available (still shows in eval modal)
             if (currentAnalytics && currentAnalytics.cohort) {
                 cohortAvgDisplay.textContent = 'Cohort avg: ' + currentAnalytics.cohort.cohort_avg + '%';
             } else {
@@ -3031,7 +3112,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
             
             if (isEvaluated) {
-                // View only mode
                 modalTitle.innerHTML = '<i class="fa-solid fa-eye"></i> View Evaluation';
                 modalHint.textContent = 'View the evaluation details for this DPR entry.';
                 scoreInput.value = currentScore > 0 ? currentScore : '';
@@ -3041,7 +3121,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 submitBtn.style.display = 'none';
                 document.querySelector('#evaluateModal .modal-actions .btn-close-modal:first-child').textContent = 'Close';
             } else {
-                // Edit mode
                 modalTitle.innerHTML = '<i class="fa-solid fa-star"></i> Evaluate DPR Entry';
                 modalHint.textContent = 'Provide a score and feedback for this DPR entry.';
                 scoreInput.value = '';
@@ -3052,17 +3131,13 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 document.querySelector('#evaluateModal .modal-actions .btn-close-modal:first-child').textContent = 'Cancel';
             }
             
-            // Prevent body scroll when modal is open
             document.body.style.overflow = 'hidden';
-            
-            // Show modal with fade-in
             modal.style.display = 'flex';
             requestAnimationFrame(() => {
                 modal.classList.add('active');
             });
         }
 
-        // ----- Close Evaluate Modal -----
         function closeEvaluateModal() {
             const modal = document.getElementById('evaluateModal');
             if (modal) {
@@ -3075,7 +3150,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 document.getElementById('evaluateDprId').value = '';
                 document.getElementById('isEvaluated').value = '0';
                 
-                // Reset readonly states
                 const scoreInput = document.getElementById('score');
                 const feedbackInput = document.getElementById('supervisor_feedback');
                 const submitBtn = document.getElementById('submitEvaluateBtn');
@@ -3086,12 +3160,11 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         }
 
-        // ----- Submit Evaluation -----
+        // ===== SUBMIT EVALUATION =====
         function submitEvaluation() {
             const dprId = document.getElementById('evaluateDprId').value;
             const isEvaluated = document.getElementById('isEvaluated').value;
             
-            // If already evaluated, don't allow submission
             if (isEvaluated === '1') {
                 showToast('This DPR has already been evaluated.', 'error');
                 return;
@@ -3100,7 +3173,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             const score = document.getElementById('score').value;
             const feedback = document.getElementById('supervisor_feedback').value;
             
-            // Validate
             if (!dprId || dprId <= 0) {
                 showToast('Invalid DPR entry.', 'error');
                 return;
@@ -3112,12 +3184,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 return;
             }
             
-            // Disable submit button
             const submitBtn = document.getElementById('submitEvaluateBtn');
             submitBtn.disabled = true;
             submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting...';
             
-            // Send data
             const formData = new FormData();
             formData.append('action', 'evaluate_dpr');
             formData.append('dpr_id', dprId);
@@ -3143,8 +3213,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     }
                     closeEvaluateModal();
                     
-                    // Refresh the DPR table
-                    const studentName = document.getElementById('pageTitle').textContent.replace('DPR: ', '');
                     const firstRow = document.querySelector('#dprTableBody tr');
                     if (firstRow && !firstRow.classList.contains('dpr-empty-row')) {
                         showInternList();
@@ -3167,81 +3235,47 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             });
         }
 
-        // ----- Modal Close Functions -----
-        function closeTaskModal() {
-            const modal = document.getElementById('taskModal');
-            if (modal) {
-                modal.classList.remove('active');
-                document.body.style.overflow = '';
-            }
-        }
-
-        // ----- Event Listeners -----
-        document.getElementById('closeTaskBtn').addEventListener('click', closeTaskModal);
-        document.getElementById('closeTaskBtn2').addEventListener('click', closeTaskModal);
-
-        // Fixed: Evaluate Modal close buttons
-        document.getElementById('closeEvaluateBtn').addEventListener('click', closeEvaluateModal);
-        document.getElementById('closeEvaluateBtn2').addEventListener('click', closeEvaluateModal);
-        
-        document.getElementById('submitEvaluateBtn').addEventListener('click', submitEvaluation);
-
-        // Close modals on overlay click
-        document.getElementById('taskModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-                closeTaskModal();
-            }
-        });
-
-        // Fixed: Evaluate Modal overlay click
-        document.getElementById('evaluateModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-                closeEvaluateModal();
-            }
-        });
-
-        // Close modals on Escape key
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                if (document.getElementById('taskModal').classList.contains('active')) {
-                    closeTaskModal();
-                }
-                // Fixed: Check evaluate modal instead of feedback modal
-                if (document.getElementById('evaluateModal').classList.contains('active')) {
-                    closeEvaluateModal();
-                }
-                if (document.getElementById('passwordModal').classList.contains('active')) {
-                    closePasswordModal();
-                }
-                if (sidebar.classList.contains('open')) {
-                    closeSidebar();
-                }
-                if (document.getElementById('notifDropdown').classList.contains('active')) {
-                    document.getElementById('notifDropdown').classList.remove('active');
-                }
-            }
-        });
-
-        // ----- Show Intern List (Back) -----
+        // ===== SHOW INTERN LIST =====
         function showInternList() {
             document.getElementById('internListView').classList.remove('hidden');
             document.getElementById('dprView').classList.add('hidden');
             document.getElementById('loadingSpinner').classList.remove('show');
             
-            // Reset page title and note
             document.getElementById('pageTitle').textContent = 'My Interns';
             document.getElementById('pageNote').textContent = 'Committed interns under your assigned companies and supervisor account.';
             
-            // Hide back button
             document.getElementById('backBtn').classList.add('hidden');
-            
-            // Clear analytics data
             currentAnalytics = null;
+            dprData = [];
         }
 
-        // Toast click to dismiss
-        document.getElementById('toast').addEventListener('click', function() {
-            this.classList.remove('show');
+        // ===== EVENT LISTENERS =====
+        document.getElementById('closeTaskBtn').addEventListener('click', closeTaskModal);
+        document.getElementById('closeTaskBtn2').addEventListener('click', closeTaskModal);
+
+        document.getElementById('closeEvaluateBtn').addEventListener('click', closeEvaluateModal);
+        document.getElementById('closeEvaluateBtn2').addEventListener('click', closeEvaluateModal);
+        
+        document.getElementById('submitEvaluateBtn').addEventListener('click', submitEvaluation);
+
+        document.getElementById('taskModal').addEventListener('click', function(e) {
+            if (e.target === this) closeTaskModal();
+        });
+
+        document.getElementById('evaluateModal').addEventListener('click', function(e) {
+            if (e.target === this) closeEvaluateModal();
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                if (document.getElementById('taskModal').classList.contains('active')) closeTaskModal();
+                if (document.getElementById('evaluateModal').classList.contains('active')) closeEvaluateModal();
+                if (document.getElementById('passwordModal').classList.contains('active')) closePasswordModal();
+                if (sidebar.classList.contains('open')) closeSidebar();
+                if (document.getElementById('notifDropdown').classList.contains('active')) {
+                    document.getElementById('notifDropdown').classList.remove('active');
+                }
+            }
         });
 
         // ===== MOBILE MENU TOGGLE =====
@@ -3268,12 +3302,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         if (sidebarOverlay) {
             sidebarOverlay.addEventListener('click', closeSidebar);
         }
-
-        document.addEventListener('keydown', function(event) {
-            if (event.key === 'Escape' && sidebar.classList.contains('open')) {
-                closeSidebar();
-            }
-        });
 
         window.addEventListener('resize', function() {
             if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
@@ -3410,8 +3438,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             });
         }
 
-        // ----- Debug helper - log when page loads -----
-        console.log('Page loaded with notification system and score drop detection.');
+        // ===== INITIALIZATION =====
+        document.addEventListener('DOMContentLoaded', function() {
+            renderInterns();
+        });
+
+        console.log('Supervisor dashboard loaded with table and pagination design.');
     </script>
 </body>
 </html>

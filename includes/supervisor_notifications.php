@@ -25,7 +25,7 @@ function getSupervisorNotifications($pdo, $supervisor_id, $limit = 20, $offset =
         $limit = max(1, (int)$limit);
         $offset = max(0, (int)$offset);
         $stmt = $pdo->prepare(
-            "SELECT n.*, u.firstname, u.lastname FROM notifications n LEFT JOIN users u ON n.sender_id = u.id WHERE n.user_id = ? ORDER BY n.created_at DESC LIMIT {$limit} OFFSET {$offset}"
+            "SELECT n.*, u.firstname, u.lastname, u.profile_picture FROM notifications n LEFT JOIN users u ON n.sender_id = u.id WHERE n.user_id = ? ORDER BY n.created_at DESC LIMIT {$limit} OFFSET {$offset}"
         );
         $stmt->execute([$supervisor_id]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);

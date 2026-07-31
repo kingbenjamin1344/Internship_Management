@@ -3,6 +3,8 @@
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../includes/student_notifications.php';
+require_once __DIR__ . '/notification_component.php';
 
 // Check if user is student
 checkAccess('student');
@@ -30,9 +32,38 @@ function getUserProfilePicture($pdo, $user_id) {
 $committedJob = getStudentCommittedJob($pdo, $studentId);
 $hasCommittedJob = (bool)$committedJob;
 
-// Handle AJAX requests for password change and avatar update
+// Load notifications
+$notifications = getStudentNotifications($pdo, $studentId, 10, 0);
+$unreadCount = getStudentUnreadNotificationCount($pdo, $studentId);
+
+// Handle AJAX requests for password change, avatar update, and notifications
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+    
+    // Notification actions
+    if ($_POST['action'] === 'get_notifications') {
+        $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+        $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+        $notifs = getStudentNotifications($pdo, $studentId, $limit, $offset);
+        $unread = getStudentUnreadNotificationCount($pdo, $studentId);
+        echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $unread]);
+        exit;
+    }
+    
+    if ($_POST['action'] === 'mark_read') {
+        $notificationId = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+        $result = markStudentNotificationRead($pdo, $notificationId, $studentId);
+        $unread = getStudentUnreadNotificationCount($pdo, $studentId);
+        echo json_encode(['success' => $result, 'unread_count' => $unread]);
+        exit;
+    }
+    
+    if ($_POST['action'] === 'mark_all_read') {
+        $result = markStudentAllNotificationsRead($pdo, $studentId);
+        $unread = getStudentUnreadNotificationCount($pdo, $studentId);
+        echo json_encode(['success' => $result, 'unread_count' => $unread]);
+        exit;
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {
@@ -134,6 +165,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
     <link rel="stylesheet" href="../assets/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <?php renderStudentNotificationCSS(); ?>
     <style>
         /* ============================================================
            Dark Green (#003300) & Golden Yellow (#FFCC33) theme
@@ -1067,10 +1099,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     </nav>
 
                     <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
+                    <?php renderStudentNotificationBell($unreadCount, $notifications); ?>
                 </div>
             </div>
 
@@ -1396,5 +1425,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         });
     </script>
+    <?php renderStudentNotificationScript($studentId); ?>
 </body>
 </html>

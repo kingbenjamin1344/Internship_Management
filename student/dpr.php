@@ -3,15 +3,9 @@
 // Full working code with database integration and modal functionality
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../includes/functions.php';
-require_once '../includes/notifications.php';
-
-// Include database configuration from config folder
 require_once __DIR__ . '/../config/database.php';
-
-
-
-
-
+require_once __DIR__ . '/../includes/student_notifications.php';
+require_once __DIR__ . '/notification_component.php';
 
 // Check if user is student
 checkAccess('student');
@@ -30,10 +24,11 @@ if (!$committedJob) {
     exit;
 }
 
+// Load notifications
+$notifications = getStudentNotifications($pdo, $student_id, 10, 0);
+$unreadCount = getStudentUnreadNotificationCount($pdo, $student_id);
+
 // ===== PROFILE PICTURE / PASSWORD SETTINGS =====
-// NOTE: assumes a `users` table with columns `id`, `password` (hashed) and
-// `profile_picture` (relative path, nullable). Adjust column/table names to
-// match your actual schema if they differ.
 $avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
 $avatarPublicPath = '../assets/uploads/avatars/';
 
@@ -221,6 +216,31 @@ function getDPRStatistics($pdo, $student_id) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
     
+    // Notification actions
+    if ($_POST['action'] === 'get_notifications') {
+        $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+        $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+        $notifs = getStudentNotifications($pdo, $student_id, $limit, $offset);
+        $unread = getStudentUnreadNotificationCount($pdo, $student_id);
+        echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $unread]);
+        exit;
+    }
+    
+    if ($_POST['action'] === 'mark_read') {
+        $notificationId = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+        $result = markStudentNotificationRead($pdo, $notificationId, $student_id);
+        $unread = getStudentUnreadNotificationCount($pdo, $student_id);
+        echo json_encode(['success' => $result, 'unread_count' => $unread]);
+        exit;
+    }
+    
+    if ($_POST['action'] === 'mark_all_read') {
+        $result = markStudentAllNotificationsRead($pdo, $student_id);
+        $unread = getStudentUnreadNotificationCount($pdo, $student_id);
+        echo json_encode(['success' => $result, 'unread_count' => $unread]);
+        exit;
+    }
+    
     if ($_POST['action'] === 'add_dpr') {
         $date = $_POST['date'] ?? date('Y-m-d');
         $time_in = $_POST['time_in'] ?? null;
@@ -265,8 +285,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'retroactive_flags' => $retroFlags
             ];
             
-            // You could insert this into a monitoring log table if needed
-            // For now, we'll store it in session for display
             $_SESSION['dpr_submission_info'] = $submissionLog;
 
             $supervisorId = findSupervisorForStudent($pdo, $student_id);
@@ -442,7 +460,16 @@ try {
     }
 }
 
-// Get monitoring data (keep functions but don't display cards)
+// ===== PAGINATION SETUP =====
+$currentPage = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($currentPage < 1) $currentPage = 1;
+$limit = 10; // items per page
+$offset = ($currentPage - 1) * $limit;
+$totalEntries = count($dprEntries);
+$totalPages = max(1, ceil($totalEntries / $limit));
+$paginatedEntries = array_slice($dprEntries, $offset, $limit);
+
+// Get monitoring data
 $dprStats = getDPRStatistics($pdo, $student_id);
 $missedSubmissions = checkMissedDPRSubmissions($pdo, $student_id, $committedJob['committed_at']);
 $retroactiveFlags = checkRetroactiveSubmissions($pdo, $student_id, date('Y-m-d'));
@@ -459,18 +486,17 @@ try {
     $availableDates = [];
 }
 
-// Current profile picture (used to render the sidebar avatar)
+// Current profile picture
 $profilePicture = getUserProfilePicture($pdo, $student_id);
 $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
-// Format dates for display (d M Y)
+// Format dates for display
 function formatDateDisplay($date) {
     if (empty($date)) return '';
     $timestamp = strtotime($date);
     return date('d M Y', $timestamp);
 }
 
-// Format time for display
 function formatTimeDisplay($time) {
     if (empty($time)) return '—';
     return date('h:i A', strtotime($time));
@@ -485,6 +511,7 @@ function formatTimeDisplay($time) {
     <link rel="stylesheet" href="../assets/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <?php renderStudentNotificationCSS(); ?>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
     <style>
@@ -687,7 +714,7 @@ function formatTimeDisplay($time) {
         /* ---- Main content ---- */
         .main-content {
             flex: 1;
-            padding: 0 32px 32px 32px;  /* No top padding so header touches top */
+            padding: 0 32px 32px 32px;
             display: flex;
             flex-direction: column;
         }
@@ -699,7 +726,7 @@ function formatTimeDisplay($time) {
             align-items: center;
             padding: 14px 32px;
             background: #003300;
-            margin: 0 -32px 24px -32px;  /* Stretch full width, flush with left/right */
+            margin: 0 -32px 24px -32px;
             flex-wrap: wrap;
             gap: 16px;
             position: sticky;
@@ -834,62 +861,67 @@ function formatTimeDisplay($time) {
         .page-card {
             background: #ffffff;
             border: 1px solid #e2e8f0;
-            padding: 24px 28px 32px;
+            padding: 20px 24px 28px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
             flex: 1;
             border-radius: 0;
         }
 
-        .page-card-header {
+        /* ---- Section Header ---- */
+        .section-header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
+            align-items: center;
             flex-wrap: wrap;
-            gap: 16px;
-            margin-bottom: 20px;
+            gap: 12px;
+            margin-bottom: 16px;
         }
 
-        .page-card-header .title-section h2 {
-            font-size: 1.3rem;
+        .section-header h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #0f172a;
             display: flex;
             align-items: center;
             gap: 10px;
-            color: #0f172a;
         }
 
-        .page-card-header .title-section h2 i {
+        .section-header h2 i {
             color: #3b82f6;
         }
 
-        .page-card-header .title-section p.sub {
-            color: #64748b;
-            font-size: 0.9rem;
-            margin-top: 2px;
+        .badge-count {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 12px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #475569;
+            border-radius: 0;
         }
 
-        /* ---- Job commitment info (sharp) ---- */
         .job-commitment-info {
             background: #f8fafc;
             border: 1px solid #e2e8f0;
-            padding: 14px 20px;
+            padding: 10px 16px;
             display: flex;
             align-items: center;
             gap: 12px;
             flex-shrink: 0;
-            min-width: 280px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
         }
 
         .job-commitment-info .job-icon {
             background: #3b82f6;
             color: white;
-            width: 40px;
-            height: 40px;
+            width: 36px;
+            height: 36px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            font-size: 1rem;
             flex-shrink: 0;
             border-radius: 0;
         }
@@ -903,12 +935,12 @@ function formatTimeDisplay($time) {
             font-weight: 700;
             color: #0f172a;
             display: block;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
         }
 
         .job-commitment-info .job-details .job-meta {
             color: #64748b;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             display: block;
             margin-top: 2px;
         }
@@ -925,31 +957,30 @@ function formatTimeDisplay($time) {
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
-            gap: 16px;
-            margin-bottom: 20px;
+            gap: 12px;
+            margin-bottom: 16px;
             padding: 12px 16px;
             background: #f8fafc;
             border: 1px solid #e2e8f0;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
         }
 
         .controls-left {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             flex-wrap: wrap;
         }
 
         .controls-right {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             flex-wrap: wrap;
         }
 
         .filter-label {
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 600;
             color: #64748b;
             text-transform: uppercase;
@@ -962,9 +993,8 @@ function formatTimeDisplay($time) {
             align-items: center;
             gap: 6px;
             background: #fff;
-            padding: 4px 12px 4px 16px;
+            padding: 4px 10px 4px 12px;
             border: 1px solid #e2e8f0;
-            transition: 0.2s;
             border-radius: 0;
         }
 
@@ -980,12 +1010,12 @@ function formatTimeDisplay($time) {
 
         .filter-item select {
             border: none;
-            padding: 8px 4px;
-            font-size: 0.85rem;
+            padding: 6px 4px;
+            font-size: 0.8rem;
             background: transparent;
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             color: #0a1628;
-            min-width: 130px;
+            min-width: 110px;
             cursor: pointer;
         }
 
@@ -994,13 +1024,13 @@ function formatTimeDisplay($time) {
         }
 
         .btn-sm {
-            padding: 8px 18px;
+            padding: 6px 14px;
             border-radius: 0;
             font-weight: 600;
-            font-size: 0.82rem;
+            font-size: 0.75rem;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             cursor: pointer;
             transition: all 0.2s;
             border: 1px solid transparent;
@@ -1057,34 +1087,36 @@ function formatTimeDisplay($time) {
         }
 
         /* ---- Table wrapper (sharp) ---- */
-        .dpr-table-wrap {
+        .table-wrap {
             overflow-x: auto;
             background: #fff;
             border: 1px solid #e2e8f0;
             box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
+            min-height: 320px;
         }
 
         .dpr-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.9rem;
+            font-size: 0.82rem;
         }
 
         .dpr-table th {
             background: #f8fafc;
             color: #1e293b;
             font-weight: 600;
-            padding: 14px 16px;
+            padding: 8px 10px;
             text-align: left;
             border-bottom: 1px solid #e2e8f0;
-            font-size: 0.8rem;
+            font-size: 0.68rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
+            white-space: nowrap;
         }
 
         .dpr-table td {
-            padding: 14px 16px;
+            padding: 7px 10px;
             border-bottom: 1px solid #f1f5f9;
             vertical-align: middle;
         }
@@ -1103,9 +1135,9 @@ function formatTimeDisplay($time) {
         }
 
         .badge-status {
-            padding: 4px 14px;
+            padding: 3px 12px;
             border-radius: 0;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 600;
             display: inline-block;
             border: 1px solid transparent;
@@ -1130,15 +1162,15 @@ function formatTimeDisplay($time) {
         }
 
         .view-btn {
-            padding: 6px 16px;
+            padding: 3px 12px;
             border-radius: 0;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.15s;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             border: 1px solid transparent;
         }
@@ -1181,7 +1213,6 @@ function formatTimeDisplay($time) {
             padding: 32px 16px;
             text-align: center;
             color: #94a3b8;
-            font-style: italic;
         }
 
         .empty-row td i {
@@ -1189,6 +1220,57 @@ function formatTimeDisplay($time) {
             display: block;
             margin-bottom: 12px;
             color: #cbd5e1;
+        }
+
+        /* ===== PAGINATION ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: 12px;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
         }
 
         /* ===== MODAL STYLES (sharp) ===== */
@@ -1216,23 +1298,12 @@ function formatTimeDisplay($time) {
             border: 1px solid #e2e8f0;
             max-width: 560px;
             width: 100%;
-            padding: 32px 30px 28px;
+            padding: 28px 26px 24px;
             box-shadow: 0 40px 60px -20px rgba(0,0,0,0.3);
             animation: slideUp 0.25s ease;
-            max-height: none;
-            height: auto;
-            overflow: visible;
-            position: relative;
+            max-height: 90vh;
+            overflow-y: auto;
             border-radius: 0;
-        }
-
-        #dprModal .modal-card,
-        #taskModal .modal-card,
-        #feedbackModal .modal-card,
-        #passwordModal .modal-card {
-            max-height: none;
-            height: auto;
-            overflow: visible;
         }
 
         #passwordModal .modal-card {
@@ -1254,11 +1325,11 @@ function formatTimeDisplay($time) {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
         }
 
         .modal-header h2 {
-            font-size: 1.4rem;
+            font-size: 1.2rem;
             font-weight: 700;
             color: #0f172a;
             display: flex;
@@ -1287,20 +1358,20 @@ function formatTimeDisplay($time) {
 
         .modal-hint {
             color: #64748b;
-            font-size: 0.9rem;
-            margin-bottom: 22px;
+            font-size: 0.85rem;
+            margin-bottom: 18px;
         }
 
         .form-group {
-            margin-bottom: 18px;
+            margin-bottom: 16px;
         }
 
         .form-group label {
             display: block;
             font-weight: 600;
-            font-size: 0.85rem;
+            font-size: 0.82rem;
             color: #1e293b;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
         }
 
         .form-group label i {
@@ -1312,10 +1383,10 @@ function formatTimeDisplay($time) {
         .form-group textarea,
         .form-group select {
             width: 100%;
-            padding: 12px 14px;
+            padding: 10px 12px;
             border: 1px solid #d1d9e6;
             border-radius: 0;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             background: #fafcff;
             transition: 0.15s;
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -1330,16 +1401,16 @@ function formatTimeDisplay($time) {
         }
 
         .form-group textarea {
-            min-height: 80px;
+            min-height: 70px;
             resize: vertical;
-            max-height: 200px;
+            max-height: 180px;
         }
 
         .form-row-three {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
             gap: 12px;
-            margin-bottom: 18px;
+            margin-bottom: 16px;
         }
 
         .form-row-three .form-group {
@@ -1348,12 +1419,12 @@ function formatTimeDisplay($time) {
 
         .form-row-three .form-group input {
             width: 100%;
-            padding: 10px 12px;
+            padding: 8px 10px;
         }
 
         .form-row-three .form-group label {
-            font-size: 0.8rem;
-            margin-bottom: 4px;
+            font-size: 0.78rem;
+            margin-bottom: 3px;
         }
 
         @media (max-width: 600px) {
@@ -1366,34 +1437,23 @@ function formatTimeDisplay($time) {
             }
         }
 
-        .form-row {
-            display: flex;
-            gap: 16px;
-            flex-wrap: wrap;
-        }
-
-        .form-row .form-group {
-            flex: 1;
-            min-width: 120px;
-        }
-
         .modal-actions {
             display: flex;
-            gap: 12px;
+            gap: 10px;
             justify-content: flex-end;
-            margin-top: 24px;
+            margin-top: 20px;
             border-top: 1px solid #edf2f7;
-            padding-top: 22px;
+            padding-top: 18px;
         }
 
         .btn-close-modal {
             background: #f1f5f9;
             border: 1px solid #e2e8f0;
             color: #1e293b;
-            padding: 10px 24px;
+            padding: 8px 20px;
             border-radius: 0;
             font-weight: 600;
-            font-size: 0.85rem;
+            font-size: 0.82rem;
             cursor: pointer;
             transition: 0.15s;
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -1407,16 +1467,16 @@ function formatTimeDisplay($time) {
             background: #0f172a;
             border: 1px solid #0f172a;
             color: #fff;
-            padding: 10px 28px;
+            padding: 8px 24px;
             border-radius: 0;
             font-weight: 600;
-            font-size: 0.85rem;
+            font-size: 0.82rem;
             cursor: pointer;
             transition: 0.15s;
             font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
 
         .btn-submit:hover {
@@ -1426,23 +1486,23 @@ function formatTimeDisplay($time) {
         }
 
         .view-content-display {
-            padding: 8px 0 4px;
+            padding: 4px 0;
         }
 
         .view-content-display .meta-info {
             display: flex;
-            gap: 24px;
+            gap: 20px;
             flex-wrap: wrap;
-            margin-bottom: 16px;
-            padding-bottom: 16px;
+            margin-bottom: 14px;
+            padding-bottom: 14px;
             border-bottom: 1px solid #edf2f7;
         }
 
         .view-content-display .meta-info .meta-item {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 0.85rem;
+            gap: 6px;
+            font-size: 0.82rem;
             color: #64748b;
         }
 
@@ -1453,12 +1513,12 @@ function formatTimeDisplay($time) {
 
         .view-content-display .content-text {
             background: #f8fafc;
-            padding: 16px 20px;
-            font-size: 0.95rem;
+            padding: 14px 18px;
+            font-size: 0.9rem;
             line-height: 1.7;
             color: #1e293b;
-            min-height: 60px;
-            max-height: 300px;
+            min-height: 50px;
+            max-height: 280px;
             overflow-y: auto;
             white-space: pre-wrap;
             word-wrap: break-word;
@@ -1485,11 +1545,11 @@ function formatTimeDisplay($time) {
             right: 30px;
             background: #0f172a;
             color: #f1f5f9;
-            padding: 16px 24px;
+            padding: 14px 20px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             display: none;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             z-index: 2000;
             font-weight: 500;
             max-width: 400px;
@@ -1518,39 +1578,37 @@ function formatTimeDisplay($time) {
         }
 
         .toast i {
-            font-size: 1.2rem;
+            font-size: 1.1rem;
         }
 
         .alert-box {
             background: #fef3c7;
             border: 1px solid #f59e0b;
             color: #92400e;
-            padding: 16px 20px;
-            margin-bottom: 20px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             border-radius: 0;
         }
 
         .alert-box i {
-            font-size: 1.2rem;
+            font-size: 1.1rem;
         }
 
+        /* ---- Responsive ---- */
         @media (max-width: 1024px) {
-            .page-card-header {
+            .section-header {
                 flex-direction: column;
+                align-items: stretch;
             }
             .job-commitment-info {
                 width: 100%;
-                min-width: unset;
-            }
-            .header-left {
-                gap: 16px;
             }
         }
 
-        @media (max-width: 720px) {
+        @media (max-width: 768px) {
             .top-header {
                 flex-direction: column;
                 align-items: stretch;
@@ -1558,9 +1616,14 @@ function formatTimeDisplay($time) {
                 margin: 0 -16px 16px -16px;
             }
             .header-left {
-                flex-direction: column;
-                align-items: flex-start;
+                flex-direction: row;
+                align-items: center;
                 gap: 12px;
+                justify-content: space-between;
+                width: 100%;
+            }
+            .header-left h1 {
+                font-size: 1.1rem;
             }
             .header-right {
                 flex-direction: column;
@@ -1574,6 +1637,10 @@ function formatTimeDisplay($time) {
                 justify-content: center;
                 flex-wrap: wrap;
             }
+            .header-nav .nav-item {
+                padding: 6px 12px;
+                font-size: 0.8rem;
+            }
             .notif-bell {
                 align-self: center;
             }
@@ -1582,15 +1649,13 @@ function formatTimeDisplay($time) {
             }
             .dpr-table th,
             .dpr-table td {
-                padding: 10px 12px;
-                font-size: 0.8rem;
+                padding: 6px 8px;
+                font-size: 0.72rem;
             }
             .modal-card {
-                padding: 24px 18px;
-            }
-            .form-row {
-                flex-direction: column;
-                gap: 0;
+                padding: 20px 16px;
+                max-height: 95vh;
+                margin: 10px;
             }
             .table-controls {
                 flex-direction: column;
@@ -1599,16 +1664,17 @@ function formatTimeDisplay($time) {
             .controls-left,
             .controls-right {
                 justify-content: center;
+                flex-wrap: wrap;
             }
             .filter-item select {
-                min-width: 100px;
+                min-width: 90px;
             }
             .view-btn {
-                font-size: 0.65rem;
-                padding: 4px 10px;
+                font-size: 0.6rem;
+                padding: 2px 8px;
             }
             .job-commitment-info {
-                padding: 12px 16px;
+                padding: 10px 14px;
             }
             .job-commitment-info .job-icon {
                 width: 32px;
@@ -1618,44 +1684,70 @@ function formatTimeDisplay($time) {
             .job-commitment-info .job-details .job-title {
                 font-size: 0.85rem;
             }
-            
-            .mobile-modal-fix .modal-card {
-                padding: 20px 16px;
-                max-height: none;
-                height: auto;
-                overflow: visible;
+            .pagination-wrapper {
+                justify-content: center;
             }
-            .view-content-display .content-text {
-                max-height: 200px;
+            .pagination-wrapper .page-info {
+                width: 100%;
+                text-align: center;
+                margin-right: 0;
+                margin-bottom: 8px;
             }
-            .form-group textarea {
-                max-height: 150px;
+            .view-content-display .meta-info {
+                flex-direction: column;
+                gap: 6px;
             }
         }
 
-        @media (max-width: 600px) {
+        @media (max-width: 480px) {
+            .header-nav .nav-item {
+                font-size: 0.7rem;
+                padding: 4px 8px;
+            }
+            .header-nav .nav-item i {
+                font-size: 0.7rem;
+            }
+            .dpr-table th,
+            .dpr-table td {
+                padding: 4px 6px;
+                font-size: 0.65rem;
+            }
+            .btn-sm {
+                font-size: 0.65rem;
+                padding: 4px 10px;
+            }
+            .badge-status {
+                font-size: 0.6rem;
+                padding: 2px 8px;
+            }
+            .view-btn {
+                font-size: 0.55rem;
+                padding: 2px 6px;
+            }
+            .modal-actions {
+                flex-direction: column;
+            }
+            .modal-actions .btn-close-modal,
+            .modal-actions .btn-submit {
+                width: 100%;
+                justify-content: center;
+            }
+            .pagination-wrapper .page-link {
+                padding: 2px 8px;
+                font-size: 0.7rem;
+                min-width: 28px;
+            }
             .controls-left,
             .controls-right {
                 flex-wrap: wrap;
             }
             .filter-item {
                 flex: 1;
-                min-width: 140px;
+                min-width: 120px;
             }
             .filter-item select {
-                min-width: 80px;
+                min-width: 70px;
                 width: 100%;
-            }
-            .view-content-display .meta-info {
-                flex-direction: column;
-                gap: 8px;
-            }
-            .form-row-three {
-                grid-template-columns: 1fr;
-                gap: 10px;
-            }
-            .form-row-three .form-group {
-                margin-bottom: 0;
             }
         }
     </style>
@@ -1716,29 +1808,27 @@ function formatTimeDisplay($time) {
                 </div>
                 <div class="header-right">
                     <nav class="header-nav">
-                        <a class="nav-item" href="dashboard.php"></i> Dashboard</a>
-                        <a class="nav-item" href="applications.php"></i> My Applications</a>
+                        <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
+                        <a class="nav-item" href="applications.php"><i class="fa-regular fa-file-lines"></i> My Applications</a>
                         <?php if (!$hasCommittedJob): ?>
-                            <a class="nav-item" href="apply.php"></i> Apply Job</a>
+                            <a class="nav-item" href="apply.php"><i class="fa-regular fa-pen-to-square"></i> Apply Job</a>
                         <?php endif; ?>
                         <?php if ($hasCommittedJob): ?>
-                            <a class="nav-item active" href="dpr.php"></i> Daily Progress Report</a>
+                            <a class="nav-item active" href="dpr.php"><i class="fa-regular fa-calendar-check"></i> Daily Progress Report</a>
                         <?php endif; ?>
                     </nav>
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
+                    <?php renderStudentNotificationBell($unreadCount, $notifications); ?>
                 </div>
             </div>
 
+            <!-- PAGE CARD -->
             <div class="page-card">
-                <div class="page-card-header">
-                    <div class="title-section">
-                        <h2><i class="fa-regular fa-clock"></i> Progress Reports</h2>
-                        <p class="sub">Track your daily time, tasks, and feedback</p>
-                    </div>
-
+                <div class="section-header">
+                    <h2>
+                        <i class="fa-regular fa-clock"></i> 
+                        Progress Reports 
+                        <span class="badge-count"><?php echo $totalEntries; ?></span>
+                    </h2>
                     <div class="job-commitment-info">
                         <div class="job-icon">
                             <i class="fa-solid fa-briefcase"></i>
@@ -1810,7 +1900,7 @@ function formatTimeDisplay($time) {
                     </div>
                 </div>
 
-                <div class="dpr-table-wrap">
+                <div class="table-wrap">
                     <table class="dpr-table" id="dprTable">
                         <thead>
                             <tr>
@@ -1823,8 +1913,8 @@ function formatTimeDisplay($time) {
                             </tr>
                         </thead>
                         <tbody id="dprTableBody">
-                            <?php if (!empty($dprEntries) && count($dprEntries) > 0): ?>
-                                <?php foreach ($dprEntries as $entry): ?>
+                            <?php if (!empty($paginatedEntries) && count($paginatedEntries) > 0): ?>
+                                <?php foreach ($paginatedEntries as $entry): ?>
                                     <?php
                                     $statusClass = strtolower($entry['status']);
                                     $statusClass = str_replace(' ', '-', $statusClass);
@@ -1885,6 +1975,53 @@ function formatTimeDisplay($time) {
                             <?php endif; ?>
                         </tbody>
                     </table>
+                </div>
+
+                <!-- ===== PAGINATION (ALWAYS VISIBLE) ===== -->
+                <div class="pagination-wrapper">
+                    <span class="page-info">
+                        <?php if ($totalEntries > 0): ?>
+                            Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $limit, $totalEntries); ?> of <?php echo $totalEntries; ?>
+                        <?php else: ?>
+                            No entries to display
+                        <?php endif; ?>
+                    </span>
+                    <?php
+                    // Previous link
+                    if ($currentPage > 1) {
+                        echo '<a href="?page=' . ($currentPage - 1) . '&filter_date=' . urlencode($filter_date) . '&filter_status=' . urlencode($filter_status) . '" class="page-link">Prev</a>';
+                    } else {
+                        echo '<span class="page-link disabled">Prev</span>';
+                    }
+
+                    // Page numbers (always show at least page 1)
+                    if ($totalPages > 1) {
+                        $start = max(1, $currentPage - 2);
+                        $end = min($totalPages, $currentPage + 2);
+                        if ($start > 1) {
+                            echo '<a href="?page=1&filter_date=' . urlencode($filter_date) . '&filter_status=' . urlencode($filter_status) . '" class="page-link">1</a>';
+                            if ($start > 2) echo '<span class="page-link disabled">…</span>';
+                        }
+                        for ($i = $start; $i <= $end; $i++) {
+                            $active = ($i == $currentPage) ? 'active' : '';
+                            echo '<a href="?page=' . $i . '&filter_date=' . urlencode($filter_date) . '&filter_status=' . urlencode($filter_status) . '" class="page-link ' . $active . '">' . $i . '</a>';
+                        }
+                        if ($end < $totalPages) {
+                            if ($end < $totalPages - 1) echo '<span class="page-link disabled">…</span>';
+                            echo '<a href="?page=' . $totalPages . '&filter_date=' . urlencode($filter_date) . '&filter_status=' . urlencode($filter_status) . '" class="page-link">' . $totalPages . '</a>';
+                        }
+                    } else {
+                        // Show page 1 when only one page or no items
+                        echo '<a href="?page=1" class="page-link active">1</a>';
+                    }
+
+                    // Next link
+                    if ($currentPage < $totalPages) {
+                        echo '<a href="?page=' . ($currentPage + 1) . '&filter_date=' . urlencode($filter_date) . '&filter_status=' . urlencode($filter_status) . '" class="page-link">Next</a>';
+                    } else {
+                        echo '<span class="page-link disabled">Next</span>';
+                    }
+                    ?>
                 </div>
             </div>
         </main>
@@ -2325,15 +2462,12 @@ function formatTimeDisplay($time) {
                     var timeOut = target.getAttribute('data-timeout');
                     var id = target.getAttribute('data-id');
                     
-                    console.log('View Task clicked:', { id: id, task: task, date: date, timeIn: timeIn, timeOut: timeOut });
-                    
                     var taskModal = document.getElementById('taskModal');
                     var taskDate = document.getElementById('taskDate');
                     var taskTime = document.getElementById('taskTime');
                     var taskTextDisplay = document.getElementById('taskTextDisplay');
 
                     if (!taskModal) {
-                        console.error('Task modal not found!');
                         return;
                     }
 
@@ -2364,15 +2498,12 @@ function formatTimeDisplay($time) {
                     var task = target.getAttribute('data-task');
                     var id = target.getAttribute('data-id');
                     
-                    console.log('View Feedback clicked:', { id: id, feedback: feedback, date: date, task: task });
-                    
                     var feedbackModal = document.getElementById('feedbackModal');
                     var feedbackDate = document.getElementById('feedbackDate');
                     var feedbackTask = document.getElementById('feedbackTask');
                     var feedbackTextDisplay = document.getElementById('feedbackTextDisplay');
 
                     if (!feedbackModal) {
-                        console.error('Feedback modal not found!');
                         return;
                     }
 
@@ -2399,9 +2530,15 @@ function formatTimeDisplay($time) {
             }
 
             // Form submission
+            var isSubmittingDPR = false;
+            
             if (form) {
                 form.addEventListener('submit', function(e) {
                     e.preventDefault();
+
+                    if (isSubmittingDPR) {
+                        return false;
+                    }
 
                     var date = dateInput ? dateInput.value.trim() : '';
                     if (!date) {
@@ -2431,6 +2568,9 @@ function formatTimeDisplay($time) {
                     formData.append('status', status);
 
                     var submitBtn = form.querySelector('button[type="submit"]');
+                    
+                    isSubmittingDPR = true;
+                    
                     if (submitBtn) {
                         submitBtn.disabled = true;
                         submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
@@ -2446,7 +2586,6 @@ function formatTimeDisplay($time) {
                                 var message = 'DPR entry added successfully!';
                                 var type = 'success';
                                 
-                                // Check for monitoring flags
                                 if (data.monitoring) {
                                     if (data.monitoring.is_missed) {
                                         message += ' (⚠️ ' + data.monitoring.days_late + ' days late)';
@@ -2463,11 +2602,13 @@ function formatTimeDisplay($time) {
                                 setTimeout(function() { window.location.reload(); }, 1500);
                             } else {
                                 showToast(data.message || 'Failed to add entry.', 'error');
+                                isSubmittingDPR = false;
                             }
                         })
                         .catch(function(error) {
                             console.error('Error:', error);
                             showToast('An error occurred. Please try again.', 'error');
+                            isSubmittingDPR = false;
                         })
                         .finally(function() {
                             if (submitBtn) {
@@ -2612,5 +2753,7 @@ function formatTimeDisplay($time) {
             doc.save('DPR_Report_' + new Date().toISOString().slice(0, 10) + '.pdf');
         }
     </script>
+
+    <?php renderStudentNotificationScript($student_id); ?>
 </body>
 </html>

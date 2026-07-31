@@ -11,6 +11,12 @@ $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Coordinator';
 $role = getUserRole();
 $userId = getUserId();
 
+// Initialize notifications
+require_once __DIR__ . '/../includes/coordinator_notifications.php';
+checkAndCreateCoordinatorNotifications($pdo, $userId);
+$unreadCount = getCoordinatorUnreadNotificationCount($pdo, $userId);
+$notificationsList = getCoordinatorNotifications($pdo, $userId, 10, 0);
+
 // ===== PROFILE PICTURE SETTINGS =====
 $avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
 $avatarPublicPath = '../assets/uploads/avatars/';
@@ -28,6 +34,38 @@ function getUserProfilePicture($pdo, $user_id) {
 // Handle AJAX requests for password change and avatar update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+    
+    // Handle notification actions first
+    if (in_array($_POST['action'], ['get_notifications', 'mark_read', 'mark_all_read'])) {
+        $action = $_POST['action'];
+        
+        if ($action === 'get_notifications') {
+            $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+            $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+            $notifs = getCoordinatorNotifications($pdo, $userId, $limit, $offset);
+            $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+            echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $count]);
+            exit;
+        }
+        
+        if ($action === 'mark_read') {
+            $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+            if ($notification_id > 0) {
+                $result = markCoordinatorNotificationRead($pdo, $notification_id, $userId);
+                $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+                echo json_encode(['success' => $result, 'unread_count' => $count]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
+            }
+            exit;
+        }
+        
+        if ($action === 'mark_all_read') {
+            $result = markCoordinatorAllNotificationsRead($pdo, $userId);
+            echo json_encode(['success' => $result, 'unread_count' => 0]);
+            exit;
+        }
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {
@@ -121,8 +159,14 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $companyFilter = isset($_GET['company']) ? trim($_GET['company']) : '';
 $supervisorFilter = isset($_GET['supervisor']) ? trim($_GET['supervisor']) : '';
 
-// Build the query with filters
-$sql = "SELECT
+// ===== PAGINATION SETUP =====
+$currentPage = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($currentPage < 1) $currentPage = 1;
+$limit = 10;
+$offset = ($currentPage - 1) * $limit;
+
+// Build the base query (without LIMIT/OFFSET) for counting
+$baseSql = "SELECT
     a.id AS application_id,
     COALESCE(a.committed_at, a.updated_at) AS committed_at,
     s.firstname AS student_firstname,
@@ -148,30 +192,74 @@ $params = [];
 
 // Add search filter for student name
 if (!empty($search)) {
-    $sql .= " AND (s.firstname LIKE ? OR s.lastname LIKE ? OR s.email LIKE ? OR CONCAT(s.firstname, ' ', s.lastname) LIKE ?)";
+    $baseSql .= " AND (s.firstname LIKE ? OR s.lastname LIKE ? OR s.email LIKE ? OR CONCAT(s.firstname, ' ', s.lastname) LIKE ?)";
     $searchParam = "%$search%";
     $params = array_merge($params, [$searchParam, $searchParam, $searchParam, $searchParam]);
 }
 
 // Add company filter
 if (!empty($companyFilter)) {
-    $sql .= " AND c.company_name = ?";
+    $baseSql .= " AND c.company_name = ?";
     $params[] = $companyFilter;
 }
 
 // Add supervisor filter
 if (!empty($supervisorFilter)) {
-    $sql .= " AND CONCAT(sp.firstname, ' ', sp.lastname) = ?";
+    $baseSql .= " AND CONCAT(sp.firstname, ' ', sp.lastname) = ?";
     $params[] = $supervisorFilter;
 }
 
-$sql .= " ORDER BY a.updated_at DESC";
+// Count total records
+$countSql = "SELECT COUNT(*) FROM job_applications a
+INNER JOIN users s ON a.student_id = s.id
+INNER JOIN jobs j ON a.job_id = j.id
+INNER JOIN companies c ON j.company_id = c.id
+LEFT JOIN users sp ON sp.id = IFNULL(c.supervisor_id, j.created_by)
+WHERE a.status = 'committed'";
 
-$acceptedStmt = $pdo->prepare($sql);
-$acceptedStmt->execute($params);
-$acceptedInterns = $acceptedStmt->fetchAll();
+// Re-apply the same WHERE clauses
+$whereClauses = [];
+$countParams = [];
+if (!empty($search)) {
+    $whereClauses[] = "(s.firstname LIKE ? OR s.lastname LIKE ? OR s.email LIKE ? OR CONCAT(s.firstname, ' ', s.lastname) LIKE ?)";
+    $searchParam = "%$search%";
+    $countParams = array_merge($countParams, [$searchParam, $searchParam, $searchParam, $searchParam]);
+}
+if (!empty($companyFilter)) {
+    $whereClauses[] = "c.company_name = ?";
+    $countParams[] = $companyFilter;
+}
+if (!empty($supervisorFilter)) {
+    $whereClauses[] = "CONCAT(sp.firstname, ' ', sp.lastname) = ?";
+    $countParams[] = $supervisorFilter;
+}
+if (!empty($whereClauses)) {
+    $countSql .= " AND " . implode(" AND ", $whereClauses);
+}
 
-// Get unique companies and supervisors for filter dropdowns
+$countStmt = $pdo->prepare($countSql);
+$countStmt->execute($countParams);
+$totalInterns = (int)$countStmt->fetchColumn();
+$totalPages = ceil($totalInterns / $limit);
+
+// Now build the final query with LIMIT/OFFSET, using the same WHERE clauses
+$finalSql = $baseSql . " ORDER BY a.updated_at DESC LIMIT ? OFFSET ?";
+$finalParams = $params; // copy the search/company/supervisor params
+$finalParams[] = $limit;
+$finalParams[] = $offset;
+
+$stmt = $pdo->prepare($finalSql);
+// Bind all parameters – the first ones are strings, the last two are integers
+$paramIndex = 1;
+foreach ($finalParams as $p) {
+    $type = ($paramIndex > count($params)) ? PDO::PARAM_INT : PDO::PARAM_STR;
+    $stmt->bindValue($paramIndex, $p, $type);
+    $paramIndex++;
+}
+$stmt->execute();
+$acceptedInterns = $stmt->fetchAll();
+
+// Get unique companies and supervisors for filter dropdowns (no pagination needed)
 $companyStmt = $pdo->query("SELECT DISTINCT company_name FROM companies ORDER BY company_name");
 $companies = $companyStmt->fetchAll();
 
@@ -732,6 +820,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             border: 1px solid #e2e8f0;
             box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
+            min-height: 320px;
         }
 
         .intern-table {
@@ -794,6 +883,58 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .empty-state p {
             font-size: 0.9rem;
+        }
+
+        /* ===== PAGINATION (bottom right - edge of page) ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+            width: 100%;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: auto;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
         }
 
         /* ---- Toast ---- */
@@ -1340,10 +1481,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     </nav>
 
                     <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
+                    <?php 
+                    require_once __DIR__ . '/notification_component.php';
+                    renderNotificationBell($unreadCount, $notificationsList);
+                    ?>
                 </div>
             </div>
 
@@ -1356,7 +1497,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     </div>
                     <div class="intern-count">
                         <i class="fa-regular fa-user" style="margin-right: 6px;"></i>
-                        <?php echo count($acceptedInterns); ?> Committed
+                        <?php echo $totalInterns; ?> Committed
                     </div>
                 </div>
 
@@ -1397,6 +1538,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             </select>
                         </div>
                     </div>
+                    <!-- Preserve page when filtering -->
+                    <input type="hidden" name="page" value="1" />
                 </form>
 
                 <!-- Filter results info -->
@@ -1459,6 +1602,64 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <p>No committed internship placements found matching your criteria.</p>
                     </div>
                 <?php endif; ?>
+
+                <!-- ===== PAGINATION (always visible) ===== -->
+                <div class="pagination-wrapper">
+                    <span class="page-info">
+                        <?php if ($totalInterns > 0): ?>
+                            Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $limit, $totalInterns); ?> of <?php echo $totalInterns; ?>
+                        <?php else: ?>
+                            No records to display
+                        <?php endif; ?>
+                    </span>
+                    <?php
+                    // Build base URL with current filters
+                    $baseUrl = 'intern.php';
+                    $params = [];
+                    if (!empty($search)) {
+                        $params[] = 'search=' . urlencode($search);
+                    }
+                    if (!empty($companyFilter)) {
+                        $params[] = 'company=' . urlencode($companyFilter);
+                    }
+                    if (!empty($supervisorFilter)) {
+                        $params[] = 'supervisor=' . urlencode($supervisorFilter);
+                    }
+                    $queryString = !empty($params) ? '?' . implode('&', $params) . '&' : '?';
+                    
+                    // Previous link
+                    if ($currentPage > 1) {
+                        echo '<a href="' . $baseUrl . $queryString . 'page=' . ($currentPage - 1) . '" class="page-link">Prev</a>';
+                    } else {
+                        echo '<span class="page-link disabled">Prev</span>';
+                    }
+
+                    // Page numbers (if there are pages)
+                    if ($totalPages > 0) {
+                        $start = max(1, $currentPage - 2);
+                        $end = min($totalPages, $currentPage + 2);
+                        if ($start > 1) {
+                            echo '<a href="' . $baseUrl . $queryString . 'page=1" class="page-link">1</a>';
+                            if ($start > 2) echo '<span class="page-link disabled">…</span>';
+                        }
+                        for ($i = $start; $i <= $end; $i++) {
+                            $active = ($i == $currentPage) ? 'active' : '';
+                            echo '<a href="' . $baseUrl . $queryString . 'page=' . $i . '" class="page-link ' . $active . '">' . $i . '</a>';
+                        }
+                        if ($end < $totalPages) {
+                            if ($end < $totalPages - 1) echo '<span class="page-link disabled">…</span>';
+                            echo '<a href="' . $baseUrl . $queryString . 'page=' . $totalPages . '" class="page-link">' . $totalPages . '</a>';
+                        }
+                    }
+
+                    // Next link
+                    if ($currentPage < $totalPages) {
+                        echo '<a href="' . $baseUrl . $queryString . 'page=' . ($currentPage + 1) . '" class="page-link">Next</a>';
+                    } else {
+                        echo '<span class="page-link disabled">Next</span>';
+                    }
+                    ?>
+                </div>
             </div>
         </main>
     </div>
@@ -1704,5 +1905,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         });
     </script>
+
+    <?php renderNotificationScript(); ?>
 </body>
 </html>

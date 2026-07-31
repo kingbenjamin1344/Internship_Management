@@ -85,7 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $_SESSION['toast_type'] = 'success';
     }
 
-    header('Location: job.php');
+    header('Location: job.php?page=' . (isset($_GET['page']) ? (int)$_GET['page'] : 1));
     exit;
 }
 
@@ -113,7 +113,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $_SESSION['toast_type'] = 'error';
     }
     
-    header('Location: job.php');
+    header('Location: job.php?page=' . (isset($_GET['page']) ? (int)$_GET['page'] : 1));
     exit;
 }
 
@@ -133,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $_SESSION['toast_type'] = 'error';
     }
     
-    header('Location: job.php');
+    header('Location: job.php?page=' . (isset($_GET['page']) ? (int)$_GET['page'] : 1));
     exit;
 }
 
@@ -237,12 +237,29 @@ if (isset($_GET['edit']) && is_numeric($_GET['edit'])) {
     $editJob = $stmt->fetch();
 }
 
+// Get assigned companies
 $stmt = $pdo->prepare('SELECT * FROM companies WHERE supervisor_id = ? ORDER BY updated_at DESC');
 $stmt->execute([$userId]);
 $assignedCompanies = $stmt->fetchAll();
 
-$jobsStmt = $pdo->prepare('SELECT j.*, c.company_name FROM jobs j INNER JOIN companies c ON j.company_id = c.id WHERE c.supervisor_id = ? ORDER BY j.created_at DESC');
-$jobsStmt->execute([$userId]);
+// ===== PAGINATION SETUP FOR JOBS =====
+$currentPage = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($currentPage < 1) $currentPage = 1;
+$limit = 10; // items per page
+$offset = ($currentPage - 1) * $limit;
+
+// Get total count of jobs
+$countStmt = $pdo->prepare('SELECT COUNT(*) FROM jobs j INNER JOIN companies c ON j.company_id = c.id WHERE c.supervisor_id = ?');
+$countStmt->execute([$userId]);
+$totalJobs = $countStmt->fetchColumn();
+$totalPages = ceil($totalJobs / $limit);
+
+// Fetch jobs for current page
+$jobsStmt = $pdo->prepare('SELECT j.*, c.company_name FROM jobs j INNER JOIN companies c ON j.company_id = c.id WHERE c.supervisor_id = ? ORDER BY j.created_at DESC LIMIT ? OFFSET ?');
+$jobsStmt->bindValue(1, $userId, PDO::PARAM_INT);
+$jobsStmt->bindValue(2, $limit, PDO::PARAM_INT);
+$jobsStmt->bindValue(3, $offset, PDO::PARAM_INT);
+$jobsStmt->execute();
 $jobs = $jobsStmt->fetchAll();
 
 // Get toast message and type
@@ -890,17 +907,17 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #f8fafc;
             color: #1e293b;
             font-weight: 600;
-            padding: 14px 16px;
+            padding: 10px 12px;
             text-align: left;
             border-bottom: 1px solid #e2e8f0;
-            font-size: 0.8rem;
+            font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
         }
 
         .company-table td,
         .job-table td {
-            padding: 14px 16px;
+            padding: 10px 12px;
             border-bottom: 1px solid #f1f5f9;
             vertical-align: middle;
         }
@@ -922,10 +939,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .industry-tag {
             display: inline-block;
-            padding: 2px 10px;
+            padding: 2px 8px;
             background: #f1f5f9;
             border: 1px solid #e2e8f0;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 500;
             color: #475569;
             border-radius: 0;
@@ -935,6 +952,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             color: #2563eb;
             text-decoration: none;
             transition: 0.15s;
+            font-size: 0.8rem;
         }
 
         .email-link:hover {
@@ -942,10 +960,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         }
 
         .address-text {
-            max-width: 200px;
+            max-width: 150px;
             white-space: pre-wrap;
             word-wrap: break-word;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
         }
 
         /* ---- Job Table Columns ---- */
@@ -1053,6 +1071,57 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .empty-state p {
             font-size: 0.95rem;
+        }
+
+        /* ===== PAGINATION (bottom right) ===== */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: 12px;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
         }
 
         /* ===== MODAL STYLES (sharp) ===== */
@@ -1476,7 +1545,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .company-table td,
             .job-table th,
             .job-table td {
-                padding: 10px 12px;
+                padding: 8px 10px;
                 font-size: 0.8rem;
             }
 
@@ -1519,6 +1588,15 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 font-size: 0.75rem;
                 padding: 6px 12px;
             }
+            
+            .address-text {
+                max-width: 100px;
+                font-size: 0.7rem;
+            }
+
+            .pagination-wrapper {
+                justify-content: center;
+            }
         }
 
         @media (max-width: 480px) {
@@ -1535,7 +1613,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .company-table td,
             .job-table th,
             .job-table td {
-                padding: 8px 6px;
+                padding: 6px 6px;
                 font-size: 0.7rem;
             }
 
@@ -1547,8 +1625,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
 
             .industry-tag {
-                font-size: 0.65rem;
-                padding: 1px 6px;
+                font-size: 0.6rem;
+                padding: 1px 4px;
             }
 
             .col-created {
@@ -1560,8 +1638,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
 
             .address-text {
-                max-width: 100px;
-                font-size: 0.7rem;
+                max-width: 80px;
+                font-size: 0.65rem;
             }
 
             .modal-header-left h3 {
@@ -1771,9 +1849,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             <table class="company-table">
                                 <thead>
                                     <tr>
-                                        <th>Company Name</th>
+                                        <th>Company</th>
                                         <th>Industry</th>
-                                        <th>Contact Person</th>
+                                        <th>Contact</th>
                                         <th>Email</th>
                                         <th>Phone</th>
                                         <th>Address</th>
@@ -1783,15 +1861,15 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                     <?php foreach ($assignedCompanies as $company): ?>
                                         <tr>
                                             <td class="company-name-cell">
-                                                <i class="fa-solid fa-building" style="color: #2563eb; margin-right: 8px;"></i>
+                                                <i class="fa-solid fa-building" style="color: #2563eb; margin-right: 6px;"></i>
                                                 <?php echo htmlspecialchars($company['company_name']); ?>
                                             </td>
                                             <td><span class="industry-tag"><?php echo htmlspecialchars($company['industry']); ?></span></td>
-                                            <td><i class="fa-regular fa-user" style="color: #94a3b8; margin-right: 6px;"></i><?php echo htmlspecialchars($company['contact_person']); ?></td>
+                                            <td><i class="fa-regular fa-user" style="color: #94a3b8; margin-right: 4px;"></i><?php echo htmlspecialchars($company['contact_person']); ?></td>
                                             <td>
                                                 <?php if ($company['contact_email']): ?>
                                                     <a href="mailto:<?php echo htmlspecialchars($company['contact_email']); ?>" class="email-link">
-                                                        <i class="fa-regular fa-envelope" style="margin-right: 4px;"></i><?php echo htmlspecialchars($company['contact_email']); ?>
+                                                        <i class="fa-regular fa-envelope" style="margin-right: 3px;"></i><?php echo htmlspecialchars($company['contact_email']); ?>
                                                     </a>
                                                 <?php else: ?>
                                                     <span style="color: #94a3b8;">-</span>
@@ -1799,14 +1877,14 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                             </td>
                                             <td>
                                                 <?php if ($company['contact_number']): ?>
-                                                    <i class="fa-solid fa-phone" style="color: #94a3b8; margin-right: 4px;"></i><?php echo htmlspecialchars($company['contact_number']); ?>
+                                                    <i class="fa-solid fa-phone" style="color: #94a3b8; margin-right: 3px;"></i><?php echo htmlspecialchars($company['contact_number']); ?>
                                                 <?php else: ?>
                                                     <span style="color: #94a3b8;">-</span>
                                                 <?php endif; ?>
                                             </td>
                                             <td>
                                                 <div class="address-text">
-                                                    <i class="fa-solid fa-location-dot" style="color: #94a3b8; margin-right: 4px;"></i><?php echo nl2br(htmlspecialchars($company['address'])); ?>
+                                                    <i class="fa-solid fa-location-dot" style="color: #94a3b8; margin-right: 3px;"></i><?php echo nl2br(htmlspecialchars($company['address'])); ?>
                                                 </div>
                                             </td>
                                         </tr>
@@ -1906,6 +1984,50 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             </table>
                         </div>
                     </div>
+
+                    <!-- ===== PAGINATION (bottom right) ===== -->
+                    <div class="pagination-wrapper">
+                        <span class="page-info">
+                            <?php if ($totalJobs > 0): ?>
+                                Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $limit, $totalJobs); ?> of <?php echo $totalJobs; ?>
+                            <?php else: ?>
+                                No jobs to display
+                            <?php endif; ?>
+                        </span>
+                        <?php
+                        // Previous link
+                        if ($currentPage > 1) {
+                            echo '<a href="?page=' . ($currentPage - 1) . '" class="page-link">Prev</a>';
+                        } else {
+                            echo '<span class="page-link disabled">Prev</span>';
+                        }
+
+                        // Page numbers (only if there are pages)
+                        if ($totalPages > 0) {
+                            $start = max(1, $currentPage - 2);
+                            $end = min($totalPages, $currentPage + 2);
+                            if ($start > 1) {
+                                echo '<a href="?page=1" class="page-link">1</a>';
+                                if ($start > 2) echo '<span class="page-link disabled">…</span>';
+                            }
+                            for ($i = $start; $i <= $end; $i++) {
+                                $active = ($i == $currentPage) ? 'active' : '';
+                                echo '<a href="?page=' . $i . '" class="page-link ' . $active . '">' . $i . '</a>';
+                            }
+                            if ($end < $totalPages) {
+                                if ($end < $totalPages - 1) echo '<span class="page-link disabled">…</span>';
+                                echo '<a href="?page=' . $totalPages . '" class="page-link">' . $totalPages . '</a>';
+                            }
+                        }
+
+                        // Next link
+                        if ($currentPage < $totalPages) {
+                            echo '<a href="?page=' . ($currentPage + 1) . '" class="page-link">Next</a>';
+                        } else {
+                            echo '<span class="page-link disabled">Next</span>';
+                        }
+                        ?>
+                    </div>
                 <?php else: ?>
                     <div class="empty-state">
                         <i class="fa-solid fa-briefcase"></i>
@@ -1928,7 +2050,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <button type="button" class="modal-close-btn" onclick="closeJobModal()">&times;</button>
             </div>
             
-            <form method="POST" action="job.php">
+            <form method="POST" action="job.php?page=<?php echo $currentPage; ?>">
                 <input type="hidden" name="action" value="create_job">
                 
                 <div class="modal-body">
@@ -1995,7 +2117,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <button type="button" class="modal-close-btn" onclick="closeEditModal()">&times;</button>
             </div>
             
-            <form method="POST" action="job.php">
+            <form method="POST" action="job.php?page=<?php echo $currentPage; ?>">
                 <input type="hidden" name="action" value="update_job">
                 <input type="hidden" name="job_id" id="edit_job_id">
                 
@@ -2063,7 +2185,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <button type="button" class="modal-close-btn" onclick="closeDeleteModal()">&times;</button>
             </div>
             
-            <form method="POST" action="job.php">
+            <form method="POST" action="job.php?page=<?php echo $currentPage; ?>">
                 <input type="hidden" name="action" value="delete_job">
                 <input type="hidden" name="job_id" id="delete_job_id">
                 
@@ -2261,7 +2383,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <div class="notif-content">
                             <div class="notif-title">${escapeHtml(notif.title || 'Notification')}</div>
                             <div class="notif-message">${escapeHtml(notif.message || '')}</div>
-                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${escapeHtml(notif.message || '')} - ${timeAgo(notif.created_at)}</span>
+                            <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${timeAgo(notif.created_at)}</span>
                         </div>
                     </a>
                 `;

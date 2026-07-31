@@ -11,6 +11,12 @@ $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Coordinator';
 $role = getUserRole();
 $userId = getUserId();
 
+// Initialize notifications
+require_once __DIR__ . '/../includes/coordinator_notifications.php';
+checkAndCreateCoordinatorNotifications($pdo, $userId);
+$unreadCount = getCoordinatorUnreadNotificationCount($pdo, $userId);
+$notificationsList = getCoordinatorNotifications($pdo, $userId, 10, 0);
+
 // ===== PROFILE PICTURE SETTINGS =====
 $avatarUploadDir = __DIR__ . '/../assets/uploads/avatars/';
 $avatarPublicPath = '../assets/uploads/avatars/';
@@ -28,6 +34,38 @@ function getUserProfilePicture($pdo, $user_id) {
 // Handle AJAX requests for password change and avatar update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+    
+    // Handle notification actions first
+    if (in_array($_POST['action'], ['get_notifications', 'mark_read', 'mark_all_read'])) {
+        $action = $_POST['action'];
+        
+        if ($action === 'get_notifications') {
+            $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+            $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+            $notifs = getCoordinatorNotifications($pdo, $userId, $limit, $offset);
+            $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+            echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $count]);
+            exit;
+        }
+        
+        if ($action === 'mark_read') {
+            $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+            if ($notification_id > 0) {
+                $result = markCoordinatorNotificationRead($pdo, $notification_id, $userId);
+                $count = getCoordinatorUnreadNotificationCount($pdo, $userId);
+                echo json_encode(['success' => $result, 'unread_count' => $count]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
+            }
+            exit;
+        }
+        
+        if ($action === 'mark_all_read') {
+            $result = markCoordinatorAllNotificationsRead($pdo, $userId);
+            echo json_encode(['success' => $result, 'unread_count' => 0]);
+            exit;
+        }
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {
@@ -842,7 +880,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             border: 2px solid #003300;
         }
 
-        /* ---- Page card (sharp, bordered) ---- */
+        /* ---- Page card (sharp, bordered) - matches intern.php ---- */
         .page-card {
             background: #ffffff;
             border: 1px solid #e2e8f0;
@@ -850,6 +888,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
             flex: 1;
             border-radius: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 500px;
         }
 
         .page-card-header {
@@ -911,13 +952,13 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         /* ---- Loading Spinner ---- */
         .loading-spinner {
             text-align: center;
-            padding: 40px 20px;
+            padding: 60px 20px;
             color: #64748b;
         }
 
         .loading-spinner i {
-            font-size: 2rem;
-            color: #3b82f6;
+            font-size: 2.5rem;
+            color: #FFCC33;
             animation: spin 1s linear infinite;
             display: block;
             margin-bottom: 12px;
@@ -932,13 +973,15 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             font-size: 0.95rem;
         }
 
-        /* ---- Table (compressed) ---- */
+        /* ---- Table (compressed) - matches intern.php style ---- */
         .table-wrap {
             overflow-x: auto;
             background: #fff;
             border: 1px solid #e2e8f0;
             box-shadow: 0 1px 4px rgba(0,0,0,0.02);
             border-radius: 0;
+            min-height: 320px;
+            flex: 1;
         }
 
         .dss-table {
@@ -951,17 +994,17 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #f8fafc;
             color: #1e293b;
             font-weight: 600;
-            padding: 8px 10px;
+            padding: 10px 12px;
             text-align: left;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 0.68rem;
+            border-bottom: 2px solid #e2e8f0;
+            font-size: 0.7rem;
             text-transform: uppercase;
-            letter-spacing: 0.3px;
+            letter-spacing: 0.4px;
             white-space: nowrap;
         }
 
         .dss-table td {
-            padding: 7px 10px;
+            padding: 9px 12px;
             border-bottom: 1px solid #f1f5f9;
             vertical-align: middle;
         }
@@ -977,28 +1020,28 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         .student-name {
             font-weight: 600;
             color: #0f172a;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
         }
 
         .company-name {
             color: #475569;
-            font-size: 0.75rem;
+            font-size: 0.78rem;
         }
 
         .job-title {
             color: #475569;
-            font-size: 0.75rem;
+            font-size: 0.78rem;
         }
 
         /* ---- Metric Scores (compressed) ---- */
         .metric-score {
             display: inline-block;
-            padding: 2px 8px;
+            padding: 2px 10px;
             font-weight: 600;
-            font-size: 0.7rem;
+            font-size: 0.72rem;
             border: 1px solid transparent;
             border-radius: 0;
-            min-width: 40px;
+            min-width: 44px;
             text-align: center;
         }
 
@@ -1054,12 +1097,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         /* ---- Empty State ---- */
         .empty-state {
             text-align: center;
-            padding: 40px 20px;
+            padding: 60px 20px;
             color: #94a3b8;
         }
 
         .empty-state i {
-            font-size: 2.5rem;
+            font-size: 3rem;
             display: block;
             margin-bottom: 12px;
             color: #cbd5e1;
@@ -1091,6 +1134,58 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         .empty-state .btn-retry:hover {
             background: #1e293b;
+        }
+
+        /* ---- Pagination (bottom right - edge of page) - matches intern.php ---- */
+        .pagination-wrapper {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 16px;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 16px;
+            width: 100%;
+        }
+
+        .pagination-wrapper .page-info {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-right: auto;
+        }
+
+        .pagination-wrapper .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: 0.15s;
+            min-width: 36px;
+            border-radius: 0;
+        }
+
+        .pagination-wrapper .page-link:hover {
+            background: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .pagination-wrapper .page-link.active {
+            background: #003300;
+            color: #FFCC33;
+            border-color: #003300;
+            pointer-events: none;
+        }
+
+        .pagination-wrapper .page-link.disabled {
+            opacity: 0.4;
+            pointer-events: none;
         }
 
         /* ---- Toast ---- */
@@ -1322,6 +1417,54 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #e9edf4;
         }
 
+        /* ===== PASSWORD MODAL ===== */
+        #passwordModal .modal-container {
+            max-width: 480px;
+        }
+
+        #passwordModal .form-group {
+            margin-bottom: 14px;
+        }
+
+        #passwordModal .form-group label {
+            display: block;
+            font-weight: 600;
+            font-size: 0.82rem;
+            color: #1e293b;
+            margin-bottom: 4px;
+        }
+
+        #passwordModal .form-group label i {
+            margin-right: 6px;
+            color: #64748b;
+        }
+
+        #passwordModal .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #d1d9e6;
+            border-radius: 0;
+            font-size: 0.9rem;
+            background: #fafcff;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        #passwordModal .form-group input:focus {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+            border-color: transparent;
+        }
+
+        #passwordModal .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+            border-top: 1px solid #edf2f7;
+            padding-top: 18px;
+        }
+
         /* ---- Responsive ---- */
         @media (max-width: 1024px) {
             .page-card-header {
@@ -1337,6 +1480,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .dss-table th,
             .dss-table td {
                 padding: 6px 8px;
+            }
+            .page-card {
+                min-height: 400px;
             }
         }
 
@@ -1404,6 +1550,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
             .page-card {
                 padding: 14px;
+                min-height: 350px;
             }
 
             .page-card-header h2 {
@@ -1447,6 +1594,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .job-title {
                 font-size: 0.65rem;
             }
+
+            .table-wrap {
+                min-height: 250px;
+            }
         }
 
         @media (max-width: 480px) {
@@ -1483,54 +1634,21 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 width: 100%;
                 justify-content: center;
             }
-        }
 
-        /* ===== PASSWORD MODAL ===== */
-        #passwordModal .modal-container {
-            max-width: 480px;
-        }
+            .page-card {
+                min-height: 300px;
+                padding: 10px;
+            }
 
-        #passwordModal .form-group {
-            margin-bottom: 14px;
-        }
+            .table-wrap {
+                min-height: 200px;
+            }
 
-        #passwordModal .form-group label {
-            display: block;
-            font-weight: 600;
-            font-size: 0.82rem;
-            color: #1e293b;
-            margin-bottom: 4px;
-        }
-
-        #passwordModal .form-group label i {
-            margin-right: 6px;
-            color: #64748b;
-        }
-
-        #passwordModal .form-group input {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #d1d9e6;
-            border-radius: 0;
-            font-size: 0.9rem;
-            background: #fafcff;
-            transition: 0.15s;
-            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-        }
-
-        #passwordModal .form-group input:focus {
-            outline: 2px solid #2563eb;
-            outline-offset: 2px;
-            border-color: transparent;
-        }
-
-        #passwordModal .modal-actions {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-            margin-top: 20px;
-            border-top: 1px solid #edf2f7;
-            padding-top: 18px;
+            .pagination-wrapper .page-link {
+                padding: 2px 8px;
+                font-size: 0.7rem;
+                min-width: 28px;
+            }
         }
     </style>
 </head>
@@ -1600,18 +1718,18 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <div class="header-right">
                     <!-- Header Navigation -->
                     <nav class="header-nav">
-                        <a class="nav-item-header" href="dashboard.php"></i> Dashboard</a>
+                        <a class="nav-item-header" href="dashboard.php"> Dashboard</a>
                         <a class="nav-item-header" href="company.php"> Companies</a>
-                        <a class="nav-item-header" href="intern.php"></i> Internship</a>
+                        <a class="nav-item-header" href="intern.php"> Internship</a>
                         <a class="nav-item-header" href="evaluation.php"> Evaluation</a>
                         <a class="nav-item-header active" href="dss.php"> Decision Support</a>
                     </nav>
 
                     <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
+                    <?php 
+                    require_once __DIR__ . '/notification_component.php';
+                    renderNotificationBell($unreadCount, $notificationsList);
+                    ?>
                 </div>
             </div>
 
@@ -1628,13 +1746,46 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 </div>
 
                 <!-- Loading and Results -->
-                <div id="dssContainer">
-                    <div id="loadingSpinner" class="loading-spinner" style="display: none;">
+                <div id="dssContainer" style="flex: 1; display: flex; flex-direction: column;">
+                    <div id="loadingSpinner" class="loading-spinner" style="display: flex;">
                         <i class="fa-solid fa-spinner fa-spin"></i>
                         <p>Analyzing student performance metrics...</p>
                     </div>
 
-                    <div id="resultsContainer"></div>
+                    <div id="resultsContainer" style="display: none; flex: 1; display: flex; flex-direction: column;">
+                        <div class="table-wrap">
+                            <table class="dss-table">
+                                <thead>
+                                    <tr>
+                                        <th>Student</th>
+                                        <th>Company</th>
+                                        <th>Job</th>
+                                        <th>Velocity</th>
+                                        <th>Grade Var.</th>
+                                        <th>Sent. Disc.</th>
+                                        <th>Sentiment</th>
+                                        <th>Risk</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dssTableBody">
+                                    <tr>
+                                        <td colspan="8" style="text-align:center;padding:40px;color:#94a3b8;">
+                                            <i class="fa-regular fa-smile" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>
+                                            Loading student data...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== PAGINATION (Always Visible) ===== -->
+                <div class="pagination-wrapper" id="paginationWrapper">
+                    <span class="page-info" id="pageInfo">Loading...</span>
+                    <a href="#" class="page-link disabled" id="prevPage">Prev</a>
+                    <span id="pageNumbers"></span>
+                    <a href="#" class="page-link disabled" id="nextPage">Next</a>
                 </div>
             </div>
         </main>
@@ -1872,6 +2023,11 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         }
 
         // ===== DSS FUNCTIONS =====
+        // Pagination variables
+        let currentPage = 1;
+        const itemsPerPage = 10;
+        let allData = [];
+
         // Load DSS data when page loads
         document.addEventListener('DOMContentLoaded', function() {
             loadDSSData();
@@ -1882,8 +2038,16 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             const resultsContainer = document.getElementById('resultsContainer');
             
             try {
-                loadingSpinner.style.display = 'block';
-                resultsContainer.innerHTML = '';
+                loadingSpinner.style.display = 'flex';
+                resultsContainer.style.display = 'none';
+                
+                // Show pagination with loading state
+                const paginationWrapper = document.getElementById('paginationWrapper');
+                paginationWrapper.style.display = 'flex';
+                document.getElementById('pageInfo').textContent = 'Loading...';
+                document.getElementById('prevPage').className = 'page-link disabled';
+                document.getElementById('nextPage').className = 'page-link disabled';
+                document.getElementById('pageNumbers').innerHTML = '';
                 
                 const response = await fetch(window.location.href, {
                     method: 'POST',
@@ -1896,6 +2060,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 const data = await response.json();
                 
                 if (data.success && data.data.length > 0) {
+                    allData = data.data;
                     displayResults(data.data);
                 } else {
                     displayEmptyState(data.message || 'No student data available for analysis.');
@@ -1906,6 +2071,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 displayError('Failed to load decision support data. Please try again.');
             } finally {
                 loadingSpinner.style.display = 'none';
+                resultsContainer.style.display = 'flex';
             }
         }
 
@@ -1926,89 +2092,200 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <span class="stat-pill" style="background: #fee2e2; border-color: #fca5a5;"><i class="fa-solid fa-exclamation-circle" style="color: #dc2626;"></i> At-Risk: <span class="count">${atRisk}</span></span>
             `;
             
-            let html = `
-                <div class="table-wrap">
-                    <table class="dss-table">
-                        <thead>
-                            <tr>
-                                <th>Student</th>
-                                <th>Company</th>
-                                <th>Job</th>
-                                <th>Velocity</th>
-                                <th>Grade Var.</th>
-                                <th>Sent. Disc.</th>
-                                <th>Sentiment</th>
-                                <th>Risk</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-            `;
+            // Show results container
+            resultsContainer.style.display = 'flex';
             
-            data.forEach(student => {
-                const velocityScore = student.submission_velocity || 0;
-                const gradeScore = student.grade_variance || 0;
-                const sentimentScore = student.sentiment_discrepancy || 0;
-                const studentSentimentScore = student.student_sentiment || 0;
-                
-                const velocityClass = velocityScore >= 75 ? 'high' : (velocityScore >= 50 ? 'medium' : 'low');
-                const gradeClass = gradeScore >= 75 ? 'high' : (gradeScore >= 50 ? 'medium' : 'low');
-                const sentimentClass = sentimentScore >= 75 ? 'high' : (sentimentScore >= 50 ? 'medium' : 'low');
-                const studentSentimentClass = studentSentimentScore >= 75 ? 'high' : (studentSentimentScore >= 50 ? 'medium' : 'low');
-                
-                const riskClass = student.risk_classification === 'High Performing' ? 'high-performing' : 
-                                 (student.risk_classification === 'Neutral' ? 'neutral' : 'at-risk');
-                
-                const riskIcon = student.risk_classification === 'High Performing' ? '✅' : 
-                                 (student.risk_classification === 'Neutral' ? '⚠️' : '🚨');
-                
-                html += `
-                    <tr>
-                        <td class="student-name">${escapeHtml(student.student_name)}</td>
-                        <td class="company-name">${escapeHtml(student.company_name)}</td>
-                        <td class="job-title">${escapeHtml(student.job_title)}</td>
-                        <td><span class="metric-score ${velocityClass}">${velocityScore}%</span></td>
-                        <td><span class="metric-score ${gradeClass}">${gradeScore}%</span></td>
-                        <td><span class="metric-score ${sentimentClass}">${sentimentScore}%</span></td>
-                        <td><span class="metric-score ${studentSentimentClass}">${studentSentimentScore}%</span></td>
-                        <td><span class="risk-badge ${riskClass}">${riskIcon} ${student.risk_classification}</span></td>
-                    </tr>
-                `;
-            });
+            // Store data and render first page
+            allData = data;
+            renderPage(1);
+        }
+
+        // ===== PAGINATION FUNCTIONS =====
+        function renderPage(page) {
+            currentPage = page;
+            const totalItems = allData.length;
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
             
-            html += `
-                        </tbody>
-                    </table>
-                </div>
-            `;
+            // Always show pagination wrapper
+            const paginationWrapper = document.getElementById('paginationWrapper');
+            paginationWrapper.style.display = 'flex';
             
-            resultsContainer.innerHTML = html;
+            if (totalItems === 0) {
+                // Update pagination for empty state
+                document.getElementById('pageInfo').textContent = 'Showing 0–0 of 0';
+                document.getElementById('prevPage').className = 'page-link disabled';
+                document.getElementById('nextPage').className = 'page-link disabled';
+                document.getElementById('pageNumbers').innerHTML = '';
+                return;
+            }
+            
+            const start = (page - 1) * itemsPerPage;
+            const end = Math.min(start + itemsPerPage, totalItems);
+            const pageItems = allData.slice(start, end);
+            
+            // Update page info
+            document.getElementById('pageInfo').textContent = 
+                `Showing ${totalItems > 0 ? start + 1 : 0}–${end} of ${totalItems}`;
+            
+            // Render the table with current page items
+            renderTableRows(pageItems);
+            
+            // Update pagination controls
+            const prevLink = document.getElementById('prevPage');
+            const nextLink = document.getElementById('nextPage');
+            const pageNumbers = document.getElementById('pageNumbers');
+            
+            prevLink.className = 'page-link' + (page <= 1 ? ' disabled' : '');
+            prevLink.href = '#';
+            prevLink.onclick = function(e) {
+                e.preventDefault();
+                if (page > 1) renderPage(page - 1);
+            };
+            
+            nextLink.className = 'page-link' + (page >= totalPages ? ' disabled' : '');
+            nextLink.href = '#';
+            nextLink.onclick = function(e) {
+                e.preventDefault();
+                if (page < totalPages) renderPage(page + 1);
+            };
+            
+            // Generate page number links
+            let pageHtml = '';
+            const maxVisible = 5;
+            let startPage = Math.max(1, page - Math.floor(maxVisible / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+            
+            if (endPage - startPage < maxVisible - 1) {
+                startPage = Math.max(1, endPage - maxVisible + 1);
+            }
+            
+            if (startPage > 1) {
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderPage(1)">1</a>`;
+                if (startPage > 2) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+            }
+            
+            for (let i = startPage; i <= endPage; i++) {
+                pageHtml += `<a href="#" class="page-link${i === page ? ' active' : ''}" onclick="event.preventDefault(); renderPage(${i})">${i}</a>`;
+            }
+            
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    pageHtml += `<span class="page-link disabled">…</span>`;
+                }
+                pageHtml += `<a href="#" class="page-link" onclick="event.preventDefault(); renderPage(${totalPages})">${totalPages}</a>`;
+            }
+            
+            pageNumbers.innerHTML = pageHtml;
+        }
+
+        function renderTableRows(data) {
+            const tbody = document.getElementById('dssTableBody');
+            if (!tbody) return;
+            
+            let html = '';
+            
+            if (data.length === 0) {
+                html = `<tr>
+                    <td colspan="8" style="text-align:center;padding:40px;color:#94a3b8;">
+                        <i class="fa-regular fa-smile" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>
+                        No students found.
+                    </td>
+                </tr>`;
+            } else {
+                data.forEach(student => {
+                    const velocityScore = student.submission_velocity || 0;
+                    const gradeScore = student.grade_variance || 0;
+                    const sentimentScore = student.sentiment_discrepancy || 0;
+                    const studentSentimentScore = student.student_sentiment || 0;
+                    
+                    const velocityClass = velocityScore >= 75 ? 'high' : (velocityScore >= 50 ? 'medium' : 'low');
+                    const gradeClass = gradeScore >= 75 ? 'high' : (gradeScore >= 50 ? 'medium' : 'low');
+                    const sentimentClass = sentimentScore >= 75 ? 'high' : (sentimentScore >= 50 ? 'medium' : 'low');
+                    const studentSentimentClass = studentSentimentScore >= 75 ? 'high' : (studentSentimentScore >= 50 ? 'medium' : 'low');
+                    
+                    const riskClass = student.risk_classification === 'High Performing' ? 'high-performing' : 
+                                     (student.risk_classification === 'Neutral' ? 'neutral' : 'at-risk');
+                    
+                    const riskIcon = student.risk_classification === 'High Performing' ? '✅' : 
+                                     (student.risk_classification === 'Neutral' ? '⚠️' : '🚨');
+                    
+                    html += `
+                        <tr>
+                            <td><span class="student-name">${escapeHtml(student.student_name)}</span></td>
+                            <td><span class="company-name">${escapeHtml(student.company_name)}</span></td>
+                            <td><span class="job-title">${escapeHtml(student.job_title)}</span></td>
+                            <td><span class="metric-score ${velocityClass}">${velocityScore}%</span></td>
+                            <td><span class="metric-score ${gradeClass}">${gradeScore}%</span></td>
+                            <td><span class="metric-score ${sentimentClass}">${sentimentScore}%</span></td>
+                            <td><span class="metric-score ${studentSentimentClass}">${studentSentimentScore}%</span></td>
+                            <td><span class="risk-badge ${riskClass}">${riskIcon} ${student.risk_classification}</span></td>
+                        </tr>
+                    `;
+                });
+            }
+            
+            tbody.innerHTML = html;
         }
 
         function displayEmptyState(message) {
             const resultsContainer = document.getElementById('resultsContainer');
+            resultsContainer.style.display = 'flex';
+            
+            const tbody = document.getElementById('dssTableBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr>
+                    <td colspan="8" style="text-align:center;padding:40px;">
+                        <div class="empty-state" style="padding:20px;">
+                            <i class="fa-solid fa-users" style="font-size:2rem;"></i>
+                            <h3>No Students Found</h3>
+                            <p>${message || 'There are no committed students with internship data available for analysis.'}</p>
+                        </div>
+                    </td>
+                </tr>`;
+            }
+            
             document.getElementById('summaryStats').innerHTML = '';
-            resultsContainer.innerHTML = `
-                <div class="empty-state">
-                    <i class="fa-solid fa-users"></i>
-                    <h3>No Students Found</h3>
-                    <p>${message || 'There are no committed students with internship data available for analysis.'}</p>
-                </div>
-            `;
+            
+            // Show pagination with empty state
+            const paginationWrapper = document.getElementById('paginationWrapper');
+            paginationWrapper.style.display = 'flex';
+            document.getElementById('pageInfo').textContent = 'Showing 0–0 of 0';
+            document.getElementById('prevPage').className = 'page-link disabled';
+            document.getElementById('nextPage').className = 'page-link disabled';
+            document.getElementById('pageNumbers').innerHTML = '';
         }
 
         function displayError(message) {
             const resultsContainer = document.getElementById('resultsContainer');
+            resultsContainer.style.display = 'flex';
+            
+            const tbody = document.getElementById('dssTableBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr>
+                    <td colspan="8" style="text-align:center;padding:40px;">
+                        <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+                            <i class="fa-solid fa-exclamation-triangle" style="font-size:2rem;color:#ef4444;"></i>
+                            <span style="color:#1e293b;font-weight:600;">Error</span>
+                            <span style="color:#64748b;font-size:0.9rem;">${message}</span>
+                            <button class="btn-retry" onclick="loadDSSData()" style="margin-top:4px;">
+                                <i class="fa-solid fa-rotate"></i> Try Again
+                            </button>
+                        </div>
+                    </td>
+                </tr>`;
+            }
+            
             document.getElementById('summaryStats').innerHTML = '';
-            resultsContainer.innerHTML = `
-                <div class="empty-state">
-                    <i class="fa-solid fa-exclamation-triangle" style="color: #ef4444;"></i>
-                    <h3>Error</h3>
-                    <p>${message}</p>
-                    <button class="btn-retry" onclick="loadDSSData()">
-                        <i class="fa-solid fa-rotate"></i> Try Again
-                    </button>
-                </div>
-            `;
+            
+            // Show pagination with error state
+            const paginationWrapper = document.getElementById('paginationWrapper');
+            paginationWrapper.style.display = 'flex';
+            document.getElementById('pageInfo').textContent = 'Error loading data';
+            document.getElementById('prevPage').className = 'page-link disabled';
+            document.getElementById('nextPage').className = 'page-link disabled';
+            document.getElementById('pageNumbers').innerHTML = '';
         }
 
         function escapeHtml(text) {
@@ -2028,5 +2305,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }
         });
     </script>
+
+    <?php renderNotificationScript(); ?>
 </body>
 </html>
