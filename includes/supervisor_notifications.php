@@ -63,6 +63,20 @@ function markSupervisorAllNotificationsRead($pdo, $supervisor_id) {
     }
 }
 
+function deleteSupervisorNotification($pdo, $notification_id, $supervisor_id) {
+    if (empty($supervisor_id) || empty($notification_id)) {
+        return false;
+    }
+
+    try {
+        $stmt = $pdo->prepare("DELETE FROM notifications WHERE id = ? AND user_id = ?");
+        return $stmt->execute([$notification_id, $supervisor_id]);
+    } catch (PDOException $e) {
+        error_log("Supervisor delete notification error: " . $e->getMessage());
+        return false;
+    }
+}
+
 function getSupervisorNotificationSource($notif) {
     $source = trim((($notif['firstname'] ?? '') . ' ' . ($notif['lastname'] ?? '')));
     return $source !== '' ? $source : 'System';

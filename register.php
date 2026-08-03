@@ -424,28 +424,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             100% { transform: rotate(360deg); }
         }
 
-        /* ---- Alerts ---- */
-        .alert {
-            padding: 0.9rem 1.25rem;
-            border-radius: 0px; /* No edges */
-            margin-bottom: 1.5rem;
-            font-size: 0.95rem;
-            font-weight: 500;
-            border-left: 4px solid transparent;
-        }
-
-        .alert.error {
-            background: #fef2f2;
-            color: #b91c1c;
-            border-left-color: #ef4444;
-        }
-
-        .alert.success {
-            background: #ecfdf5;
-            color: #065f46;
-            border-left-color: #10b981;
-        }
-
+        /* ---- Auth Link (below form) ---- */
         .auth-link {
             text-align: center;
             margin-top: 1.5rem;
@@ -467,7 +446,108 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-bottom-color: #0b2614;
         }
 
-        /* ---- Responsive (Mobile) ---- */
+        /* ---- Modal Overlay (common for both error and success) ---- */
+        .modal-overlay {
+            display: none; /* Hidden by default, shown via JS */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            animation: fadeIn 0.25s ease;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-box {
+            background: #ffffff;
+            max-width: 440px;
+            width: 90%;
+            padding: 2rem 2rem 1.75rem;
+            border-radius: 0px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            animation: slideUp 0.3s ease;
+        }
+
+        .modal-box .modal-icon {
+            font-size: 2.5rem;
+            width: 70px;
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            border-radius: 0px;
+        }
+
+        .modal-box .modal-icon.error-icon {
+            color: #b91c1c;
+            background: #fef2f2;
+        }
+
+        .modal-box .modal-icon.success-icon {
+            color: #065f46;
+            background: #ecfdf5;
+        }
+
+        .modal-box h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #0b2614;
+            margin-bottom: 0.5rem;
+        }
+
+        .modal-box p {
+            color: #475569;
+            font-size: 0.95rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-box .btn-modal {
+            background: #0b2614;
+            color: #ffffff;
+            border: none;
+            padding: 0.6rem 2rem;
+            font-weight: 500;
+            font-size: 0.95rem;
+            cursor: pointer;
+            border-radius: 0px;
+            transition: background 0.2s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .modal-box .btn-modal:hover {
+            background: #1a3d26;
+        }
+
+        .modal-box .btn-modal.primary {
+            background: #ffce00;
+            color: #0b2614;
+        }
+
+        .modal-box .btn-modal.primary:hover {
+            background: #e6b800;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        /* ---- Responsive ---- */
         @media (max-width: 1024px) {
             .container {
                 flex-direction: column;
@@ -503,12 +583,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <h2>Create your account</h2>
                 <p class="subhead">Join the internship RBAC system – complete all steps to register.</p>
 
-                <?php if ($error): ?>
-                    <div class="alert error"><?php echo $error; ?></div>
-                <?php endif; ?>
-                <?php if ($success): ?>
-                    <div class="alert success"><?php echo htmlspecialchars($success); ?></div>
-                <?php endif; ?>
+                <!-- No inline alerts – we use a modal instead -->
 
                 <!-- Progress Bar -->
                 <div class="progress-wrapper">
@@ -619,8 +694,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     </div>
 
+    <!-- ===== MODAL (for both error and success) ===== -->
+    <div class="modal-overlay" id="messageModal">
+        <div class="modal-box">
+            <div class="modal-icon" id="modalIcon"><i class="fa-solid fa-circle-exclamation"></i></div>
+            <h3 id="modalTitle">Oops!</h3>
+            <p id="modalMessage">Something went wrong.</p>
+            <!-- The button will be changed dynamically -->
+            <button class="btn-modal" id="modalButton">Got it</button>
+        </div>
+    </div>
+
     <script>
         (function() {
+            // ----- Step navigation (unchanged) -----
             const form = document.getElementById('registerForm');
             const steps = document.querySelectorAll('.step-content');
             const boxes = [
@@ -636,7 +723,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             let currentStep = 1; // 1-3
 
-            // Show the given step, hide others, update progress
             function showStep(step) {
                 steps.forEach((el, index) => {
                     const stepNum = index + 1;
@@ -647,7 +733,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 });
 
-                // Update boxes and labels
                 boxes.forEach((box, idx) => {
                     const num = idx + 1;
                     box.classList.remove('active', 'completed');
@@ -661,45 +746,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 });
 
                 currentStep = step;
-
-                // Scroll to top of card on mobile
                 const card = document.querySelector('.auth-card');
                 if (window.innerWidth <= 600) {
                     card.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 }
             }
 
-            // Next step
             function nextStep() {
-                if (currentStep < 3) {
-                    showStep(currentStep + 1);
-                }
+                if (currentStep < 3) showStep(currentStep + 1);
             }
 
-            // Previous step
             function prevStep() {
-                if (currentStep > 1) {
-                    showStep(currentStep - 1);
-                }
+                if (currentStep > 1) showStep(currentStep - 1);
             }
 
-            // Attach event listeners
-            document.querySelectorAll('.next-step').forEach(btn => {
-                btn.addEventListener('click', nextStep);
-            });
+            document.querySelectorAll('.next-step').forEach(btn => btn.addEventListener('click', nextStep));
+            document.querySelectorAll('.prev-step').forEach(btn => btn.addEventListener('click', prevStep));
 
-            document.querySelectorAll('.prev-step').forEach(btn => {
-                btn.addEventListener('click', prevStep);
-            });
+            // If there's a message (error or success), show the modal and auto-jump to step 3 if needed
+            const error = <?php echo json_encode($error); ?>;
+            const success = <?php echo json_encode($success); ?>;
 
-            // If there's an alert (form submitted), show step 3
-            const hasAlert = document.querySelector('.alert.error, .alert.success');
-            if (hasAlert) {
+            // ---- Modal logic ----
+            const modal = document.getElementById('messageModal');
+            const modalIcon = document.getElementById('modalIcon');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalMessage = document.getElementById('modalMessage');
+            const modalButton = document.getElementById('modalButton');
+
+            function showModal(type, message) {
+                // type: 'error' or 'success'
+                if (type === 'error') {
+                    modalIcon.className = 'modal-icon error-icon';
+                    modalIcon.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i>';
+                    modalTitle.textContent = 'Oops!';
+                    modalButton.textContent = 'Got it';
+                    modalButton.className = 'btn-modal';
+                    modalButton.onclick = function() {
+                        modal.classList.remove('active');
+                    };
+                } else { // success
+                    modalIcon.className = 'modal-icon success-icon';
+                    modalIcon.innerHTML = '<i class="fa-regular fa-circle-check"></i>';
+                    modalTitle.textContent = 'Success!';
+                    modalButton.textContent = 'Go to Admin';
+                    modalButton.className = 'btn-modal primary';
+                    modalButton.onclick = function() {
+                        window.location.href = 'login.php'; // redirect to login page
+                    };
+                }
+                modalMessage.innerHTML = message; // may contain <br> tags
+                modal.classList.add('active');
+            }
+
+            // Show modal if there's an error or success
+            if (error) {
+                showModal('error', error);
+                // After error, keep the form as is; step might be 3 if submitted
+                // We'll let the step logic below handle that
+            } else if (success) {
+                showModal('success', success);
+                // Clear form data (already cleared by PHP)
+            }
+
+            // Set initial step: if there was a message (submitted), go to step 3; else step 1
+            if (error || success) {
                 showStep(3);
             } else {
                 showStep(1);
             }
+
+            // Close modal when clicking outside (overlay) – only for error modals (success modal has a primary button)
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) {
+                    // Only close if it's an error modal (button text is "Got it")
+                    if (modalButton.textContent === 'Got it') {
+                        modal.classList.remove('active');
+                    }
+                }
+            });
+
+            // Close with Escape key – same condition
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    if (modalButton.textContent === 'Got it') {
+                        modal.classList.remove('active');
+                    }
+                }
+            });
+
         })();
     </script>
+
 </body>
 </html>

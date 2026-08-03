@@ -136,6 +136,19 @@ function markStudentAllNotificationsRead($pdo, $studentId) {
 }
 
 /**
+ * Delete a notification for a student
+ */
+function deleteStudentNotification($pdo, $notificationId, $studentId) {
+    try {
+        $stmt = $pdo->prepare("DELETE FROM notifications WHERE id = ? AND user_id = ?");
+        return $stmt->execute([$notificationId, $studentId]);
+    } catch (PDOException $e) {
+        error_log("Error deleting student notification: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
  * Get notification message text
  */
 function getStudentNotificationMessage($notification) {

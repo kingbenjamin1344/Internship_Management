@@ -26,14 +26,18 @@ function renderNotificationBell($unreadCount, $notifications) {
                 <?php if (!empty($notifications)): ?>
                     <?php foreach ($notifications as $notif): ?>
                         <?php
-                            $messageText = !empty($notif['message']) ? $notif['message'] : ($notif['title'] ?? 'Notification');
+                            $titleText = $notif['title'] && trim($notif['title']) !== '' ? $notif['title'] : 'Notification';
+                            $messageText = !empty($notif['message']) ? $notif['message'] : $titleText;
                             $source = 'System';
                             $initials = 'SY';
                             if (!empty($notif['firstname']) && !empty($notif['lastname'])) {
                                 $source = $notif['firstname'] . ' ' . $notif['lastname'];
                                 $initials = strtoupper(substr($notif['firstname'], 0, 1) . substr($notif['lastname'], 0, 1));
                             }
+                            $role = $notif['role'] ?? 'system';
+                            $roleBadge = '<span class="notif-role-badge ' . strtolower($role) . '">' . strtoupper($role) . '</span>';
                             $createdDate = !empty($notif['created_at']) ? date('M d, Y', strtotime($notif['created_at'])) : '';
+                            $timeAgoStr = timeAgoFormat($notif['created_at'] ?? '');
                         ?>
                         <div class="notif-item <?php echo $notif['is_read'] ? '' : 'unread'; ?>"
                              data-id="<?php echo $notif['id']; ?>"
@@ -41,17 +45,24 @@ function renderNotificationBell($unreadCount, $notifications) {
                              onclick="handleNotificationClick(event, <?php echo $notif['id']; ?>, '<?php echo htmlspecialchars($notif['link'] ?? '#', ENT_QUOTES); ?>')">
                             <div class="notif-avatar-circle">
                                 <?php if (!empty($notif['profile_picture'])): ?>
-                                    <img src="../assets/uploads/avatars/<?php echo htmlspecialchars($notif['profile_picture']); ?>" alt="Avatar">
+                                    <img src="../assets/uploads/avatars/<?php echo htmlspecialchars($notif['profile_picture']); ?>" alt="<?php echo htmlspecialchars($source); ?>" title="<?php echo htmlspecialchars($source); ?>">
                                 <?php else: ?>
-                                    <span class="notif-initials"><?php echo $initials; ?></span>
+                                    <span class="notif-initials" title="<?php echo htmlspecialchars($source); ?>"><?php echo htmlspecialchars($initials); ?></span>
                                 <?php endif; ?>
                             </div>
                             <div class="notif-content">
-                                <div class="notif-title"><?php echo htmlspecialchars($notif['title'] ?? 'Notification'); ?></div>
+                                <div class="notif-title"><?php echo htmlspecialchars($titleText); ?></div>
                                 <div class="notif-description"><?php echo htmlspecialchars($messageText); ?></div>
-                                <div class="notif-date"><?php echo htmlspecialchars($createdDate); ?></div>
-                                <div class="notif-meta"><?php echo htmlspecialchars($source); ?></div>
+                                <div class="notif-meta">
+                                    <span class="notif-sender-name">
+                                        <i class="fa-solid fa-user"></i> <?php echo htmlspecialchars($source); ?>
+                                    </span>
+                                    <?php echo $roleBadge; ?>
+                                    <span style="margin: 0 4px;">•</span>
+                                    <span><i class="fa-regular fa-clock"></i> <?php echo htmlspecialchars($timeAgoStr); ?></span>
+                                </div>
                             </div>
+                            <button type="button" class="notif-dismiss" data-id="<?php echo $notif['id']; ?>" title="Dismiss" onclick="event.stopPropagation(); dismissNotification(<?php echo $notif['id']; ?>, this.closest('.notif-item'))">×</button>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
@@ -198,30 +209,41 @@ function renderNotificationScript() {
 
             let html = '';
             notifications.forEach(function(notif) {
-                const messageText = notif.message || notif.title || 'Notification';
+                const titleText = notif.title && String(notif.title).trim() !== '' ? notif.title : 'Notification';
+                const messageText = notif.message || titleText;
                 const source = (notif.firstname && notif.lastname) ? (notif.firstname + ' ' + notif.lastname) : 'System';
                 const initials = (notif.firstname && notif.lastname) ? 
                     (notif.firstname.charAt(0).toUpperCase() + notif.lastname.charAt(0).toUpperCase()) : 'SY';
                 const link = notif.link || '#';
                 const readClass = notif.is_read ? '' : 'unread';
+                const role = notif.role || 'system';
+                const roleBadge = '<span class="notif-role-badge ' + role.toLowerCase() + '">' + role.toUpperCase() + '</span>';
                 const createdDate = notif.created_at ? formatDate(notif.created_at) : '';
+                const timeAgoStr = timeAgo(notif.created_at);
 
                 html += '<div class="notif-item ' + readClass + '" data-id="' + notif.id + '" data-link="' + escapeHtml(link) + '" onclick="handleNotificationClick(event, ' + notif.id + ', \'' + escapeHtml(link) + '\')">' +
                     '<div class="notif-avatar-circle">';
                 
                 if (notif.profile_picture) {
-                    html += '<img src="../assets/uploads/avatars/' + escapeHtml(notif.profile_picture) + '" alt="Avatar">';
+                    html += '<img src="../assets/uploads/avatars/' + escapeHtml(notif.profile_picture) + '" alt="' + escapeHtml(source) + '" title="' + escapeHtml(source) + '">';
                 } else {
-                    html += '<span class="notif-initials">' + initials + '</span>';
+                    html += '<span class="notif-initials" title="' + escapeHtml(source) + '">' + escapeHtml(initials) + '</span>';
                 }
                 
                 html += '</div>' +
                     '<div class="notif-content">' +
-                    '<div class="notif-title">' + escapeHtml(notif.title || 'Notification') + '</div>' +
+                    '<div class="notif-title">' + escapeHtml(titleText) + '</div>' +
                     '<div class="notif-description">' + escapeHtml(messageText) + '</div>' +
-                    '<div class="notif-date">' + escapeHtml(createdDate) + '</div>' +
-                    '<div class="notif-meta">' + escapeHtml(source) + '</div>' +
+                    '<div class="notif-meta">' +
+                    '<span class="notif-sender-name">' +
+                    '<i class="fa-solid fa-user"></i> ' + escapeHtml(source) +
+                    '</span>' +
+                    roleBadge +
+                    '<span style="margin: 0 4px;">•</span>' +
+                    '<span><i class="fa-regular fa-clock"></i> ' + escapeHtml(timeAgoStr) + '</span>' +
                     '</div>' +
+                    '</div>' +
+                    '<button type="button" class="notif-dismiss" data-id="' + notif.id + '" title="Dismiss" onclick="event.stopPropagation(); dismissNotification(' + notif.id + ', this.closest(\'.notif-item\'))">×</button>' +
                     '</div>';
             });
 
@@ -234,6 +256,31 @@ function renderNotificationScript() {
             const date = new Date(dateStr);
             const options = { month: 'short', day: 'numeric', year: 'numeric' };
             return date.toLocaleDateString('en-US', options);
+        }
+
+        
+        // Dismiss notification
+        function dismissNotification(notificationId, element) {
+            var formData = new FormData();
+            formData.append('action', 'delete');
+            formData.append('notification_id', notificationId);
+
+            fetch('../includes/mark_notifications.php', { method: 'POST', body: formData })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        if (element && element.parentNode) {
+                            element.parentNode.removeChild(element);
+                        }
+                        // Reload notifications to update count
+                        setTimeout(function() {
+                            loadNotifications();
+                        }, 200);
+                    }
+                })
+                .catch(function(err) {
+                    console.error('Error dismissing notification:', err);
+                });
         }
 
         // Handle notification click

@@ -170,6 +170,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
         $stmt = $pdo->prepare("INSERT INTO companies (company_name, address, industry, contact_person, contact_email, contact_number) VALUES (?, ?, ?, ?, ?, ?)");
         $stmt->execute([$company_name, $address, $industry, $contact_person, $contact_email, $contact_number]);
+        $companyId = $pdo->lastInsertId();
+        notifyAdmins(
+            $pdo,
+            $companyId,
+            'new_company',
+            'New Company Added',
+            "New company '{$company_name}' has been added.",
+            'company.php'
+        );
         
         $_SESSION['success'] = "Company added successfully!";
     } elseif ($_POST['action'] === 'edit_company') {

@@ -60,6 +60,15 @@ function registerUser($username, $email, $password, $firstname, $lastname, $midd
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')");
     
     if ($stmt->execute([$username, $email, $hashedPassword, $firstname, $middlename, $lastname, $suffix, $phone, $address, $birthdate])) {
+        $newUserId = $pdo->lastInsertId();
+        notifyAdmins(
+            $pdo,
+            $newUserId,
+            'pending_user',
+            'Pending User Registration',
+            trim($firstname . ' ' . $lastname) . ' is pending approval.',
+            'pending.php'
+        );
         return ['success' => true, 'message' => 'Registration successful. Please wait for approval.'];
     }
     

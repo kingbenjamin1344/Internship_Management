@@ -3,9 +3,14 @@
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/admin_notifications.php';
 
 // Check if user is admin
 checkAccess('admin');
+
+// Handle notification AJAX requests
+require_once __DIR__ . '/../includes/admin_notification_handler.php';
+handleAdminNotificationRequests($pdo, getUserId());
 
 ensureInternshipTables($pdo);
 
@@ -1408,14 +1413,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     </h1>
                 </div>
                 <div class="header-right">
-                    <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
-
-                    <!-- User Profile -->
-                    <div class="user-profile">
+                     <div class="user-profile">
                         <div class="user-avatar">
                             <?php
                                 $initials = '';
@@ -1433,13 +1431,26 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
                         </div>
                     </div>
+                    <!-- Notification bell -->
+                    <?php require_once __DIR__ . '/notification_component.php'; renderAdminNotificationBell($userId); ?>
+
+                    <!-- User Profile -->
+                   
                 </div>
             </div>
 
             <!-- PAGE CONTENT -->
             <div class="container">
 
-                <!-- Tabs -->
+               
+
+                <!-- Companies Table -->
+                <div id="companies-tab" class="tab-content <?php echo $activeTab === 'companies' ? 'active' : ''; ?>">
+                    <div class="page-card">
+                        <div class="section-header">
+                            <h2><i class="fa-solid fa-building"></i> All Companies <span class="badge-count"><?php echo $totalCompanies; ?></span></h2>
+                        </div>
+                         <!-- Tabs -->
                 <div class="tabs">
                     <a href="?tab=companies&page_c=1" class="tab-btn <?php echo $activeTab === 'companies' ? 'active' : ''; ?>">
                         <i class="fa-solid fa-building"></i> Companies
@@ -1449,20 +1460,13 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                     </a>
                 </div>
 
-                <!-- Companies Table -->
-                <div id="companies-tab" class="tab-content <?php echo $activeTab === 'companies' ? 'active' : ''; ?>">
-                    <div class="page-card">
-                        <div class="section-header">
-                            <h2><i class="fa-solid fa-building"></i> All Companies <span class="badge-count"><?php echo $totalCompanies; ?></span></h2>
-                        </div>
-
                         <div class="table-wrap">
                             <table class="data-table">
                                 <thead>
                                     <tr>
-                                        <th>ID</th>
+                                      
                                         <th>Company Name</th>
-                                        <th>Address</th>
+                              
                                         <th>Industry</th>
                                         <th>Contact Person</th>
                                         <th>Supervisor</th>
@@ -1483,12 +1487,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                     <?php else: ?>
                                         <?php foreach ($companies as $company): ?>
                                             <tr>
-                                                <td><?php echo $company['id']; ?></td>
+                                                
                                                 <td>
                                                     <div class="company-name"><?php echo htmlspecialchars($company['name']); ?></div>
                                                     <div class="company-info"><?php echo htmlspecialchars($company['contact_email'] ?? ''); ?></div>
                                                 </td>
-                                                <td><?php echo htmlspecialchars($company['address'] ?? 'N/A'); ?></td>
+                                              
                                                 <td><?php echo htmlspecialchars($company['industry'] ?? 'N/A'); ?></td>
                                                 <td>
                                                     <div style="font-size: 0.8rem; font-weight: 500;"><?php echo htmlspecialchars($company['contact_person'] ?? 'N/A'); ?></div>
@@ -1565,12 +1569,20 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <div class="section-header">
                             <h2><i class="fa-solid fa-briefcase"></i> All Jobs <span class="badge-count"><?php echo $totalJobs; ?></span></h2>
                         </div>
-
+                                     <!-- Tabs -->
+                <div class="tabs">
+                    <a href="?tab=companies&page_c=1" class="tab-btn <?php echo $activeTab === 'companies' ? 'active' : ''; ?>">
+                        <i class="fa-solid fa-building"></i> Companies
+                    </a>
+                    <a href="?tab=jobs&page_j=1" class="tab-btn <?php echo $activeTab === 'jobs' ? 'active' : ''; ?>">
+                        <i class="fa-solid fa-briefcase"></i> Jobs
+                    </a>
+                </div>
                         <div class="table-wrap">
                             <table class="data-table">
                                 <thead>
                                     <tr>
-                                        <th>ID</th>
+                                      
                                         <th>Job Title</th>
                                         <th>Company</th>
                                         <th>Slots</th>
@@ -1592,7 +1604,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                     <?php else: ?>
                                         <?php foreach ($jobs as $job): ?>
                                             <tr>
-                                                <td><?php echo $job['id']; ?></td>
+                                         
                                                 <td>
                                                     <div class="job-title"><?php echo htmlspecialchars($job['title']); ?></div>
                                                     <div class="job-info"><?php echo htmlspecialchars(substr($job['description'] ?? '', 0, 40)); ?><?php echo strlen($job['description'] ?? '') > 40 ? '...' : ''; ?></div>

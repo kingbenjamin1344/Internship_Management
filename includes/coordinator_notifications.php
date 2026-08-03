@@ -37,7 +37,8 @@ function getCoordinatorNotifications($pdo, $coordinator_id, $limit = 20, $offset
                 n.is_read,
                 n.created_at,
                 u.firstname,
-                u.lastname
+                u.lastname,
+                u.profile_picture
             FROM notifications n
             LEFT JOIN users u ON n.sender_id = u.id
             WHERE n.user_id = ?
@@ -58,7 +59,8 @@ function getCoordinatorNotifications($pdo, $coordinator_id, $limit = 20, $offset
                 n.is_read,
                 n.created_at,
                 u.firstname,
-                u.lastname
+                u.lastname,
+                u.profile_picture
             FROM notifications n
             LEFT JOIN users u ON n.sender_id = u.id
             WHERE n.user_id = $coordinator_id
@@ -79,25 +81,21 @@ function getCoordinatorNotifications($pdo, $coordinator_id, $limit = 20, $offset
  */
 function markCoordinatorNotificationRead($pdo, $notification_id, $coordinator_id) {
     try {
-        // Verify ownership before updating
-        $verifyStmt = $pdo->prepare("
-            SELECT id FROM notifications 
-            WHERE id = ? AND user_id = ?
-        ");
-        $verifyStmt->execute([$notification_id, $coordinator_id]);
-        
-        if (!$verifyStmt->fetch()) {
-            return false;
-        }
-        
         $stmt = $pdo->prepare("
             UPDATE notifications 
             SET is_read = 1 
             WHERE id = ? AND user_id = ?
         ");
-        $stmt->execute([$notification_id, $coordinator_id]);
-        return true;
+        $result = $stmt->execute([$notification_id, $coordinator_id]);
+        
+        // Log for debugging
+        if ($result) {
+            error_log("Marked notification $notification_id as read for coordinator $coordinator_id");
+        }
+        
+        return $result;
     } catch (PDOException $e) {
+        error_log("Error marking notification as read: " . $e->getMessage());
         return false;
     }
 }

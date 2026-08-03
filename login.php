@@ -69,7 +69,7 @@ if (isLoggedIn() && isActive()) {
         .branding {
             flex: 1;
             max-width: 600px;
-            text-align: left; /* Left-aligned for readability on the left side */
+            text-align: left;
         }
 
         .branding .flag-stripe {
@@ -94,12 +94,12 @@ if (isLoggedIn() && isActive()) {
 
         /* ---- Right Side: Auth Shell / Card ---- */
         .auth-shell {
-            flex: 0 0 440px; /* Fixed width for the login card */
+            flex: 0 0 440px;
         }
 
         .auth-card {
             background: #ffffff;
-            border-radius: 0px; /* No edges */
+            border-radius: 0px;
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
             padding: 2.5rem 2.5rem 2rem;
             transition: all 0.2s ease;
@@ -120,7 +120,7 @@ if (isLoggedIn() && isActive()) {
             color: #0b2614;
             width: 64px;
             height: 64px;
-            border-radius: 0px; /* No edges */
+            border-radius: 0px;
             font-size: 2rem;
             margin-bottom: 1.25rem;
         }
@@ -137,22 +137,6 @@ if (isLoggedIn() && isActive()) {
             color: #64748b;
             margin-bottom: 1.75rem;
             font-size: 0.95rem;
-        }
-
-        /* ---- Alerts ---- */
-        .alert {
-            padding: 0.9rem 1.25rem;
-            border-radius: 0px; /* No edges */
-            margin-bottom: 1.5rem;
-            font-size: 0.95rem;
-            font-weight: 500;
-            border-left: 4px solid transparent;
-        }
-
-        .alert.error {
-            background: #fef2f2;
-            color: #b91c1c;
-            border-left-color: #ef4444;
         }
 
         /* ---- Form ---- */
@@ -174,7 +158,7 @@ if (isLoggedIn() && isActive()) {
             font-size: 0.95rem;
             padding: 0.7rem 0.9rem;
             border: 1.5px solid #e2e8f0;
-            border-radius: 0px; /* No edges */
+            border-radius: 0px;
             background: #fafcfd;
             transition: border-color 0.15s ease, box-shadow 0.15s ease;
             width: 100%;
@@ -194,13 +178,13 @@ if (isLoggedIn() && isActive()) {
             align-items: center;
             justify-content: center;
             gap: 0.5rem;
-            background: #ffce00; /* Yellow */
-            color: #0b2614; /* Dark Green Text */
+            background: #ffce00;
+            color: #0b2614;
             font-weight: 600;
             font-size: 1rem;
             padding: 0.85rem 1.8rem;
             border: none;
-            border-radius: 0px; /* No edges */
+            border-radius: 0px;
             cursor: pointer;
             transition: background 0.2s ease;
             width: 100%;
@@ -209,7 +193,7 @@ if (isLoggedIn() && isActive()) {
         }
 
         .btn-primary:hover {
-            background: #e6b800; /* Slightly darker yellow */
+            background: #e6b800;
         }
 
         /* ---- Auth Link ---- */
@@ -234,7 +218,89 @@ if (isLoggedIn() && isActive()) {
             border-bottom-color: #0b2614;
         }
 
-        /* ---- Responsive (Mobile) ---- */
+        /* ---- Modal Overlay ---- */
+        .modal-overlay {
+            display: none; /* Hidden by default, shown via JS */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            animation: fadeIn 0.25s ease;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-box {
+            background: #ffffff;
+            max-width: 440px;
+            width: 90%;
+            padding: 2rem 2rem 1.75rem;
+            border-radius: 0px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            animation: slideUp 0.3s ease;
+        }
+
+        .modal-box .modal-icon {
+            font-size: 2.5rem;
+            color: #b91c1c;
+            background: #fef2f2;
+            width: 70px;
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            border-radius: 0px;
+        }
+
+        .modal-box h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #0b2614;
+            margin-bottom: 0.5rem;
+        }
+
+        .modal-box p {
+            color: #475569;
+            font-size: 0.95rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-box .btn-close-modal {
+            background: #0b2614;
+            color: #ffffff;
+            border: none;
+            padding: 0.6rem 2rem;
+            font-weight: 500;
+            font-size: 0.95rem;
+            cursor: pointer;
+            border-radius: 0px;
+            transition: background 0.2s ease;
+        }
+
+        .modal-box .btn-close-modal:hover {
+            background: #1a3d26;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        /* ---- Responsive ---- */
         @media (max-width: 900px) {
             .container {
                 flex-direction: column;
@@ -270,9 +336,7 @@ if (isLoggedIn() && isActive()) {
                 <h2>Welcome back</h2>
                 <p>Sign in to access your dashboard.</p>
 
-                <?php if ($error): ?>
-                    <div class="alert error"><?php echo htmlspecialchars($error); ?></div>
-                <?php endif; ?>
+                <!-- No inline error – we'll use a modal instead -->
 
                 <form method="POST" action="">
                     <div class="form-group">
@@ -284,7 +348,7 @@ if (isLoggedIn() && isActive()) {
                         <input type="password" id="password" name="password" placeholder="••••••••" required>
                     </div>
                     <button class="btn-primary" type="submit">
-                    Login
+                        <i class="fa-solid fa-arrow-right-to-bracket"></i> Login
                     </button>
                 </form>
 
@@ -295,5 +359,48 @@ if (isLoggedIn() && isActive()) {
         </div>
 
     </div>
+
+    <!-- ===== MODAL ===== -->
+    <div class="modal-overlay" id="errorModal">
+        <div class="modal-box">
+            <div class="modal-icon"><i class="fa-solid fa-circle-exclamation"></i></div>
+            <h3>Oops!</h3>
+            <p id="modalMessage"><?php echo htmlspecialchars($error); ?></p>
+            <button class="btn-close-modal" id="closeModalBtn">Got it</button>
+        </div>
+    </div>
+
+    <script>
+        // Show the modal if there's an error message
+        (function() {
+            const error = <?php echo json_encode($error); ?>;
+            const modal = document.getElementById('errorModal');
+            const closeBtn = document.getElementById('closeModalBtn');
+
+            if (error) {
+                modal.classList.add('active');
+            }
+
+            // Close modal when button is clicked
+            closeBtn.addEventListener('click', function() {
+                modal.classList.remove('active');
+            });
+
+            // Close modal when clicking outside the modal box (on the overlay)
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) {
+                    modal.classList.remove('active');
+                }
+            });
+
+            // Close modal with Escape key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                }
+            });
+        })();
+    </script>
+
 </body>
 </html>

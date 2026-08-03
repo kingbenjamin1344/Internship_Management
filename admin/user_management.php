@@ -3,9 +3,14 @@
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/admin_notifications.php';
 
 // Check if user is admin
 checkAccess('admin');
+
+// Handle notification AJAX requests
+require_once __DIR__ . '/../includes/admin_notification_handler.php';
+handleAdminNotificationRequests($pdo, getUserId());
 
 $fullname = $_SESSION['fullname'] ?? $_SESSION['username'] ?? 'Admin';
 $role = getUserRole();
@@ -1515,13 +1520,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 </div>
                 <div class="header-right">
                     <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
-
-                    <!-- User Profile -->
-                    <div class="user-profile">
+                     <div class="user-profile">
                         <div class="user-avatar">
                             <?php
                                 $initials = '';
@@ -1539,6 +1538,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
                         </div>
                     </div>
+                    <?php require_once __DIR__ . '/notification_component.php'; renderAdminNotificationBell($userId); ?>
+
+                    <!-- User Profile -->
+                    
                 </div>
             </div>
 
@@ -1555,10 +1558,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <table class="user-table">
                             <thead>
                                 <tr>
-                                    <th>ID</th>
+                                  
                                     <th>Name</th>
-                                    <th>Email</th>
-                                    <th>Phone</th>
+                                   
                                     <th>Created</th>
                                     <th>Role</th>
                                     <th>Status</th>
@@ -1576,13 +1578,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                                 <?php else: ?>
                                     <?php foreach ($users as $user): ?>
                                         <tr>
-                                            <td><?php echo $user['id']; ?></td>
+                                           
                                             <td>
                                                 <div class="user-name"><?php echo htmlspecialchars(getFullName($user)); ?></div>
                                                 <div class="user-info">@<?php echo htmlspecialchars($user['username']); ?></div>
                                             </td>
-                                            <td><?php echo htmlspecialchars($user['email']); ?></td>
-                                            <td><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></td>
+                                           
                                             <td><?php echo date('Y-m-d', strtotime($user['created_at'])); ?></td>
                                             <td>
                                                 <form method="POST" class="inline-form">

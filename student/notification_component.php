@@ -27,13 +27,16 @@ function renderStudentNotificationBell($unreadCount, $notifications) {
                     <?php foreach ($notifications as $notif): ?>
                         <?php
                             // Use message field if available and not empty, otherwise fall back to title
-                            $messageText = (!empty($notif['message']) && trim($notif['message']) !== '') ? $notif['message'] : ($notif['title'] ?? 'Notification');
+                            $titleText = $notif['title'] && trim($notif['title']) !== '' ? $notif['title'] : 'Notification';
+                            $messageText = (!empty($notif['message']) && trim($notif['message']) !== '') ? $notif['message'] : $titleText;
                             $source = 'System';
                             $initials = 'SY';
                             if (!empty($notif['firstname']) && !empty($notif['lastname'])) {
                                 $source = $notif['firstname'] . ' ' . $notif['lastname'];
                                 $initials = strtoupper(substr($notif['firstname'], 0, 1) . substr($notif['lastname'], 0, 1));
                             }
+                            $role = $notif['role'] ?? 'system';
+                            $roleBadge = '<span class="notif-role-badge ' . strtolower($role) . '">' . strtoupper($role) . '</span>';
                             $timeAgoStr = timeAgo($notif['created_at'] ?? '');
                         ?>
                         <div class="notif-item <?php echo $notif['is_read'] ? '' : 'unread'; ?>"
@@ -42,16 +45,24 @@ function renderStudentNotificationBell($unreadCount, $notifications) {
                              onclick="handleNotificationClick(event, <?php echo $notif['id']; ?>, '<?php echo htmlspecialchars($notif['link'] ?? '#', ENT_QUOTES); ?>')">
                             <div class="notif-avatar-circle">
                                 <?php if (!empty($notif['profile_picture'])): ?>
-                                    <img src="../assets/uploads/avatars/<?php echo htmlspecialchars($notif['profile_picture']); ?>" alt="Avatar">
+                                    <img src="../assets/uploads/avatars/<?php echo htmlspecialchars($notif['profile_picture']); ?>" alt="<?php echo htmlspecialchars($source); ?>" title="<?php echo htmlspecialchars($source); ?>">
                                 <?php else: ?>
-                                    <span class="notif-initials"><?php echo $initials; ?></span>
+                                    <span class="notif-initials" title="<?php echo htmlspecialchars($source); ?>"><?php echo $initials; ?></span>
                                 <?php endif; ?>
                             </div>
                             <div class="notif-content">
-                                <div class="notif-title"><?php echo htmlspecialchars($notif['title'] ?? 'Notification'); ?></div>
+                                <div class="notif-title"><?php echo htmlspecialchars($titleText); ?></div>
                                 <div class="notif-description"><?php echo htmlspecialchars($messageText); ?></div>
-                                <div class="notif-meta"><?php echo htmlspecialchars($source); ?> - <?php echo htmlspecialchars($timeAgoStr); ?></div>
+                                <div class="notif-meta">
+                                    <span class="notif-sender-name">
+                                        <i class="fa-solid fa-user"></i> <?php echo htmlspecialchars($source); ?>
+                                    </span>
+                                    <?php echo $roleBadge; ?>
+                                    <span style="margin: 0 4px;">•</span>
+                                    <span><i class="fa-regular fa-clock"></i> <?php echo htmlspecialchars($timeAgoStr); ?></span>
+                                </div>
                             </div>
+                            <button type="button" class="notif-dismiss" data-id="<?php echo $notif['id']; ?>" title="Dismiss" onclick="event.stopPropagation(); dismissNotification(<?php echo $notif['id']; ?>, this.closest('.notif-item'))">×</button>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
@@ -101,6 +112,7 @@ function renderStudentNotificationScript($userId) {
         const notifBadge = document.getElementById('notifBadge');
         const notifList = document.getElementById('notifList');
         const markAllReadBtn = document.getElementById('markAllRead');
+        const endpoint = '../includes/mark_notifications.php';
 
         // Toggle dropdown
         if (notifBell) {
@@ -117,7 +129,7 @@ function renderStudentNotificationScript($userId) {
                         var formData = new FormData();
                         formData.append('action', 'mark_all_read');
                         
-                        fetch(window.location.pathname.split('/').pop(), { method: 'POST', body: formData })
+                        fetch(endpoint, { method: 'POST', body: formData })
                             .then(function(response) { return response.json(); })
                             .then(function(data) {
                                 if (data.success) {
@@ -160,7 +172,7 @@ function renderStudentNotificationScript($userId) {
             formData.append('limit', 20);
             formData.append('offset', 0);
 
-            fetch(window.location.pathname.split('/').pop(), { method: 'POST', body: formData })
+            fetch(endpoint, { method: 'POST', body: formData })
                 .then(function(response) { return response.json(); })
                 .then(function(data) {
                     if (data.success && data.notifications) {
@@ -195,33 +207,68 @@ function renderStudentNotificationScript($userId) {
             let html = '';
             sortedNotifications.forEach(function(notif) {
                 // Use message field if available, otherwise fall back to title
-                const messageText = (notif.message && notif.message.trim() !== '') ? notif.message : (notif.title || 'Notification');
+                const titleText = notif.title && String(notif.title).trim() !== '' ? notif.title : 'Notification';
+                const messageText = (notif.message && notif.message.trim() !== '') ? notif.message : titleText;
                 const source = (notif.firstname && notif.lastname) ? (notif.firstname + ' ' + notif.lastname) : 'System';
                 const initials = (notif.firstname && notif.lastname) ? 
                     (notif.firstname.charAt(0).toUpperCase() + notif.lastname.charAt(0).toUpperCase()) : 'SY';
                 const link = notif.link || '#';
                 const readClass = notif.is_read ? '' : 'unread';
+                const role = notif.role || 'system';
+                const roleBadge = '<span class="notif-role-badge ' + role.toLowerCase() + '">' + role.toUpperCase() + '</span>';
                 const timeAgoStr = timeAgo(notif.created_at);
 
                 html += '<div class="notif-item ' + readClass + '" data-id="' + notif.id + '" data-link="' + escapeHtml(link) + '" onclick="handleNotificationClick(event, ' + notif.id + ', \'' + escapeHtml(link) + '\')">' +
                     '<div class="notif-avatar-circle">';
                 
                 if (notif.profile_picture) {
-                    html += '<img src="../assets/uploads/avatars/' + escapeHtml(notif.profile_picture) + '" alt="Avatar">';
+                    html += '<img src="../assets/uploads/avatars/' + escapeHtml(notif.profile_picture) + '" alt="' + escapeHtml(source) + '" title="' + escapeHtml(source) + '">';
                 } else {
-                    html += '<span class="notif-initials">' + initials + '</span>';
+                    html += '<span class="notif-initials" title="' + escapeHtml(source) + '">' + initials + '</span>';
                 }
                 
                 html += '</div>' +
                     '<div class="notif-content">' +
-                    '<div class="notif-title">' + escapeHtml(notif.title || 'Notification') + '</div>' +
+                    '<div class="notif-title">' + escapeHtml(titleText) + '</div>' +
                     '<div class="notif-description">' + escapeHtml(messageText) + '</div>' +
-                    '<div class="notif-meta">' + escapeHtml(source) + ' - ' + escapeHtml(timeAgoStr) + '</div>' +
+                    '<div class="notif-meta">' +
+                    '<span class="notif-sender-name">' +
+                    '<i class="fa-solid fa-user"></i> ' + escapeHtml(source) +
+                    '</span>' +
+                    roleBadge +
+                    '<span style="margin: 0 4px;">•</span>' +
+                    '<span><i class="fa-regular fa-clock"></i> ' + escapeHtml(timeAgoStr) + '</span>' +
                     '</div>' +
+                    '</div>' +
+                    '<button type="button" class="notif-dismiss" data-id="' + notif.id + '" title="Dismiss" onclick="event.stopPropagation(); dismissNotification(' + notif.id + ', this.closest(\'.notif-item\'))">×</button>' +
                     '</div>';
             });
 
             notifList.innerHTML = html;
+        }
+
+        // Dismiss notification
+        function dismissNotification(notificationId, element) {
+            var formData = new FormData();
+            formData.append('action', 'delete');
+            formData.append('notification_id', notificationId);
+
+            fetch(endpoint, { method: 'POST', body: formData })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        if (element && element.parentNode) {
+                            element.parentNode.removeChild(element);
+                        }
+                        // Reload notifications to update count
+                        setTimeout(function() {
+                            loadNotifications();
+                        }, 200);
+                    }
+                })
+                .catch(function(err) {
+                    console.error('Error dismissing notification:', err);
+                });
         }
 
         // Handle notification click
@@ -234,7 +281,7 @@ function renderStudentNotificationScript($userId) {
             formData.append('action', 'mark_read');
             formData.append('notification_id', notificationId);
 
-            fetch(window.location.pathname.split('/').pop(), { method: 'POST', body: formData })
+            fetch(endpoint, { method: 'POST', body: formData })
                 .then(function(response) { return response.json(); })
                 .then(function(data) {
                     if (data.success) {
@@ -275,7 +322,7 @@ function renderStudentNotificationScript($userId) {
                 var formData = new FormData();
                 formData.append('action', 'mark_all_read');
 
-                fetch(window.location.pathname.split('/').pop(), { method: 'POST', body: formData })
+                fetch(endpoint, { method: 'POST', body: formData })
                     .then(function(response) { return response.json(); })
                     .then(function(data) {
                         console.log('Mark all read response:', data); // Debug log
@@ -322,7 +369,7 @@ function renderStudentNotificationScript($userId) {
                 formData.append('limit', 1);
                 formData.append('offset', 0);
 
-                fetch(window.location.pathname.split('/').pop(), { method: 'POST', body: formData })
+                fetch(endpoint, { method: 'POST', body: formData })
                     .then(function(response) { return response.json(); })
                     .then(function(data) {
                         if (data.success) {
@@ -467,6 +514,7 @@ function renderStudentNotificationCSS() {
             border-bottom: 1px solid #f1f5f9;
             cursor: pointer;
             transition: background 0.15s;
+            position: relative;
         }
 
         .notif-item:last-child {
@@ -534,7 +582,69 @@ function renderStudentNotificationCSS() {
         .notif-item .notif-content .notif-meta {
             font-size: 0.7rem;
             color: #94a3b8;
-            display: block;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .notif-item .notif-content .notif-meta i {
+            font-size: 0.65rem;
+        }
+
+        .notif-item .notif-content .notif-meta .notif-sender-name {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .notif-item .notif-content .notif-meta .notif-role-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            font-size: 0.6rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-radius: 2px;
+        }
+
+        .notif-item .notif-content .notif-meta .notif-role-badge.supervisor {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .notif-item .notif-content .notif-meta .notif-role-badge.coordinator {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .notif-item .notif-content .notif-meta .notif-role-badge.admin {
+            background: #fecaca;
+            color: #991b1b;
+        }
+
+        .notif-item .notif-content .notif-meta .notif-role-badge.system {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .notif-item .notif-dismiss {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: none;
+            border: none;
+            color: #cbd5e1;
+            font-size: 1.5rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 4px 8px;
+            transition: 0.15s;
+            font-weight: 300;
+        }
+
+        .notif-item .notif-dismiss:hover {
+            color: #ef4444;
+            transform: scale(1.1);
         }
 
         .notif-empty {

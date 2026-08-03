@@ -240,6 +240,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         echo json_encode(['success' => $result, 'unread_count' => $unread]);
         exit;
     }
+
+    if ($_POST['action'] === 'delete') {
+        $notificationId = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+        $result = deleteStudentNotification($pdo, $notificationId, $student_id);
+        $unread = getStudentUnreadNotificationCount($pdo, $student_id);
+        echo json_encode(['success' => $result, 'unread_count' => $unread]);
+        exit;
+    }
     
     if ($_POST['action'] === 'add_dpr') {
         $date = $_POST['date'] ?? date('Y-m-d');
@@ -1808,13 +1816,13 @@ function formatTimeDisplay($time) {
                 </div>
                 <div class="header-right">
                     <nav class="header-nav">
-                        <a class="nav-item" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-                        <a class="nav-item" href="applications.php"><i class="fa-regular fa-file-lines"></i> My Applications</a>
+                        <a class="nav-item" href="dashboard.php"> Dashboard</a>
+                        <a class="nav-item" href="applications.php"> My Applications</a>
                         <?php if (!$hasCommittedJob): ?>
-                            <a class="nav-item" href="apply.php"><i class="fa-regular fa-pen-to-square"></i> Apply Job</a>
+                            <a class="nav-item" href="apply.php"> Apply Job</a>
                         <?php endif; ?>
                         <?php if ($hasCommittedJob): ?>
-                            <a class="nav-item active" href="dpr.php"><i class="fa-regular fa-calendar-check"></i> Daily Progress Report</a>
+                            <a class="nav-item active" href="dpr.php"> Daily Progress Report</a>
                         <?php endif; ?>
                     </nav>
                     <?php renderStudentNotificationBell($unreadCount, $notifications); ?>

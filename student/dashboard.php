@@ -64,6 +64,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         echo json_encode(['success' => $result, 'unread_count' => $unread]);
         exit;
     }
+
+    if ($_POST['action'] === 'delete') {
+        $notificationId = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+        $result = deleteStudentNotification($pdo, $notificationId, $studentId);
+        $unread = getStudentUnreadNotificationCount($pdo, $studentId);
+        echo json_encode(['success' => $result, 'unread_count' => $unread]);
+        exit;
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {

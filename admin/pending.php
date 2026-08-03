@@ -3,9 +3,14 @@
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/admin_notifications.php';
 
 // Check if user is admin
 checkAccess('admin');
+
+// Handle notification AJAX requests
+require_once __DIR__ . '/../includes/admin_notification_handler.php';
+handleAdminNotificationRequests($pdo, getUserId());
 
 ensureInternshipTables($pdo);
 
@@ -1402,13 +1407,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 </div>
                 <div class="header-right">
                     <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
-
-                    <!-- User Profile -->
-                    <div class="user-profile">
+                     <div class="user-profile">
                         <div class="user-avatar">
                             <?php
                                 $initials = '';
@@ -1426,6 +1425,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
                         </div>
                     </div>
+                    <?php require_once __DIR__ . '/notification_component.php'; renderAdminNotificationBell($userId); ?>
+
+                    <!-- User Profile -->
+                    
                 </div>
             </div>
 

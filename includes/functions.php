@@ -243,6 +243,23 @@ function createSystemNotification($pdo, $user_id, $sender_id, $type, $title, $me
     }
 }
 
+function notifyAdmins($pdo, $senderId, $type, $title, $message, $link = null) {
+    try {
+        $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'admin' AND status = 'active'");
+        $stmt->execute();
+        $success = true;
+        while ($admin = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if (!createSystemNotification($pdo, $admin['id'], $senderId, $type, $title, $message, $link)) {
+                $success = false;
+            }
+        }
+        return $success;
+    } catch (Exception $e) {
+        error_log("Notify admins error: " . $e->getMessage());
+        return false;
+    }
+}
+
 function findSupervisorForJob($pdo, $job_id) {
     if (empty($job_id)) {
         return null;

@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/admin_notifications.php';
 
 // Check if user is admin
 checkAccess('admin');
@@ -30,6 +31,50 @@ function getUserProfilePicture($pdo, $user_id) {
 // Handle AJAX requests for password change and avatar update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+    
+    // Handle notification actions
+    if (in_array($_POST['action'], ['get_notifications', 'mark_read', 'mark_all_read', 'delete'])) {
+        $action = $_POST['action'];
+        
+        if ($action === 'get_notifications') {
+            $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
+            $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
+            $notifs = getAdminNotifications($pdo, $userId, $limit, $offset);
+            $count = getAdminUnreadNotificationCount($pdo, $userId);
+            echo json_encode(['success' => true, 'notifications' => $notifs, 'unread_count' => $count]);
+            exit;
+        }
+        
+        if ($action === 'mark_read') {
+            $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+            if ($notification_id > 0) {
+                $result = markAdminNotificationRead($pdo, $notification_id, $userId);
+                $count = getAdminUnreadNotificationCount($pdo, $userId);
+                echo json_encode(['success' => $result, 'unread_count' => $count]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
+            }
+            exit;
+        }
+        
+        if ($action === 'mark_all_read') {
+            $result = markAdminAllNotificationsRead($pdo, $userId);
+            echo json_encode(['success' => $result, 'unread_count' => 0]);
+            exit;
+        }
+        
+        if ($action === 'delete') {
+            $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
+            if ($notification_id > 0) {
+                $result = deleteAdminNotification($pdo, $notification_id, $userId);
+                $count = getAdminUnreadNotificationCount($pdo, $userId);
+                echo json_encode(['success' => $result, 'unread_count' => $count]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
+            }
+            exit;
+        }
+    }
     
     // Change password
     if ($_POST['action'] === 'change_password') {
@@ -438,6 +483,289 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             font-size: 0.7rem;
             color: #cbd5e1;
             font-weight: 500;
+        }
+
+        /* ===== NOTIFICATION BELL & DROPDOWN ===== */
+        .notif-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+
+        .notif-bell {
+            position: relative;
+            font-size: 1.3rem;
+            color: #FFCC33;
+            background: rgba(255, 204, 51, 0.2);
+            width: 44px;
+            height: 44px;
+            border-radius: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.15s;
+            cursor: pointer;
+            border: none;
+            flex-shrink: 0;
+        }
+
+        .notif-bell:hover {
+            background: rgba(255, 204, 51, 0.4);
+            color: #fff;
+        }
+
+        .notif-badge {
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            background: #ef4444;
+            color: #fff;
+            font-size: 0.6rem;
+            font-weight: 700;
+            min-width: 20px;
+            height: 20px;
+            border-radius: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid #003300;
+            padding: 0 4px;
+        }
+
+        .notif-dropdown {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            width: 380px;
+            max-height: 420px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            display: none;
+            z-index: 1000;
+            overflow: hidden;
+            border-radius: 0;
+        }
+
+        .notif-dropdown.open {
+            display: block;
+            animation: slideDown 0.2s ease;
+        }
+
+        @keyframes slideDown {
+            0% {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .notif-dropdown-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid #edf2f7;
+            background: #f8fafc;
+        }
+
+        .notif-dropdown-header h3 {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0;
+        }
+
+        .notif-dropdown-header .mark-all-read {
+            background: none;
+            border: none;
+            color: #2563eb;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 4px 8px;
+            transition: 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .notif-dropdown-header .mark-all-read:hover {
+            text-decoration: underline;
+        }
+
+        .notif-list {
+            max-height: 320px;
+            overflow-y: auto;
+            padding: 0;
+        }
+
+        .notif-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid #f1f5f9;
+            cursor: pointer;
+            transition: background 0.15s;
+            text-decoration: none;
+            color: inherit;
+            position: relative;
+        }
+
+        .notif-item:last-child {
+            border-bottom: none;
+        }
+
+        .notif-item:hover {
+            background: #f8fafc;
+        }
+
+        .notif-item.unread {
+            background: #eff6ff;
+            border-left: 3px solid #2563eb;
+        }
+
+        .notif-avatar-circle {
+            width: 40px;
+            height: 40px;
+            flex-shrink: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #ffffff;
+            overflow: hidden;
+            border: 2px solid #e2e8f0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .notif-avatar-circle img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 50%;
+        }
+
+        .notif-initials {
+            font-weight: 700;
+            font-size: 0.85rem;
+            color: #ffffff;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+        }
+
+        .notif-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .notif-content .notif-title {
+            font-weight: 600;
+            font-size: 0.82rem;
+            color: #0f172a;
+            margin-bottom: 2px;
+        }
+
+        .notif-content .notif-description {
+            font-size: 0.78rem;
+            color: #64748b;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .notif-content .notif-meta {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .notif-content .notif-meta i {
+            font-size: 0.65rem;
+            color: #94a3b8;
+        }
+
+        .notif-sender-name {
+            font-weight: 600;
+            color: #475569;
+        }
+
+        .notif-role-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-left: 4px;
+        }
+
+        .notif-role-badge.student {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .notif-role-badge.supervisor {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .notif-role-badge.coordinator {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .notif-role-badge.admin {
+            background: #fce7f3;
+            color: #9f1239;
+        }
+
+        .notif-role-badge.system {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .notif-dismiss {
+            background: none;
+            border: none;
+            color: #ef4444;
+            font-weight: 700;
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 0 4px;
+            transition: 0.15s;
+            line-height: 1;
+        }
+
+        .notif-dismiss:hover {
+            color: #b91c1c;
+        }
+
+        .notif-empty {
+            padding: 32px 16px;
+            text-align: center;
+            color: #94a3b8;
+        }
+
+        .notif-empty i {
+            font-size: 2rem;
+            display: block;
+            margin-bottom: 8px;
+            color: #cbd5e1;
+        }
+
+        .notif-empty p {
+            font-size: 0.9rem;
         }
 
         /* ---- Page card (sharp, bordered) ---- */
@@ -1046,12 +1374,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 </div>
                 <div class="header-right">
                     <!-- Notification bell -->
-                    <button class="notif-bell" onclick="alert('No new notifications')" aria-label="Notifications">
-                        <i class="fa-regular fa-bell"></i>
-                        <span class="notif-badge">3</span>
-                    </button>
-
-                    <!-- User Profile -->
+                      <!-- User Profile -->
                     <div class="user-profile">
                         <div class="user-avatar">
                             <?php
@@ -1070,6 +1393,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                             <div class="role-label"><?php echo htmlspecialchars(getRoleDisplayName($role)); ?></div>
                         </div>
                     </div>
+                    <?php require_once __DIR__ . '/notification_component.php'; renderAdminNotificationBell($userId); ?>
+
+                   
                 </div>
             </div>
 

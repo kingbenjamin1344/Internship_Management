@@ -87,44 +87,72 @@ try {
             'unread_count' => $actualUnreadCount
         ]);
         
+    } elseif ($action === 'delete' && isset($_POST['notification_id'])) {
+        $notificationId = (int)$_POST['notification_id'];
+
+        $verifyStmt = $pdo->prepare("SELECT id FROM notifications WHERE id = ? AND user_id = ?");
+        $verifyStmt->execute([$notificationId, $userId]);
+
+        if (!$verifyStmt->fetch()) {
+            echo json_encode(['success' => false, 'message' => 'Notification not found']);
+            exit;
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM notifications WHERE id = ? AND user_id = ?");
+        $success = $stmt->execute([$notificationId, $userId]);
+
+        $countStmt = $pdo->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+        $countStmt->execute([$userId]);
+        $result = $countStmt->fetch();
+        $unreadCount = $result['count'] ?? 0;
+
+        echo json_encode([
+            'success' => $success,
+            'unread_count' => $unreadCount
+        ]);
+        
     } elseif ($action === 'get_notifications') {
         // Get notifications for this user (ONLY accept/reject notifications)
         $limit = isset($_POST['limit']) ? (int)$_POST['limit'] : 20;
         $offset = isset($_POST['offset']) ? (int)$_POST['offset'] : 0;
         
-        $stmt = $pdo->prepare("
-            SELECT 
-                n.id,
-                n.user_id,
-                n.sender_id,
-                n.type,
-                n.title,
-                n.message,
-                n.link,
-                n.is_read,
-                n.created_at,
-                u.firstname,
-                u.lastname,
-                u.profile_picture
-            FROM notifications n
-            LEFT JOIN users u ON n.sender_id = u.id
-            WHERE n.user_id = ?
-            AND n.type IN ('application_accepted', 'application_rejected')
-            ORDER BY n.is_read ASC, n.created_at DESC
-            LIMIT ? OFFSET ?
-        ");
+            // Ensure sane bounds
+            if ($limit < 1) $limit = 1;
+            if ($limit > 100) $limit = 100;
+            if ($offset < 0) $offset = 0;
+
+            $stmt = $pdo->prepare("
+                SELECT 
+                    n.id,
+                    n.user_id,
+                    n.sender_id,
+                    n.type,
+                    n.title,
+                    n.message,
+                    n.link,
+                    n.is_read,
+                    n.created_at,
+                    u.firstname,
+                    u.lastname,
+                    u.profile_picture
+                FROM notifications n
+                LEFT JOIN users u ON n.sender_id = u.id
+                WHERE n.user_id = ?
+                ORDER BY n.is_read ASC, n.created_at DESC
+                LIMIT ? OFFSET ?
+            ");
         
         $stmt->execute([$userId, $limit, $offset]);
         $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         // Get unread count (ONLY accept/reject)
-        $countStmt = $pdo->prepare("
-            SELECT COUNT(*) as count 
-            FROM notifications 
-            WHERE user_id = ? 
-            AND is_read = 0
-            AND type IN ('application_accepted', 'application_rejected')
-        ");
+            // Get unread count (all types)
+            $countStmt = $pdo->prepare("
+                SELECT COUNT(*) as count 
+                FROM notifications 
+                WHERE user_id = ? 
+                AND is_read = 0
+            ");
         $countStmt->execute([$userId]);
         $result = $countStmt->fetch();
         $unreadCount = $result['count'] ?? 0;
