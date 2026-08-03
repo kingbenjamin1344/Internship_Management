@@ -1136,6 +1136,61 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             background: #1e293b;
         }
 
+        /* ---- ML Service Required Message ---- */
+        .ml-required-message {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 80px 40px;
+            flex: 1;
+        }
+
+        .ml-required-message i {
+            font-size: 4rem;
+            color: #f59e0b;
+            margin-bottom: 20px;
+        }
+
+        .ml-required-message h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 12px;
+        }
+
+        .ml-required-message p {
+            font-size: 0.95rem;
+            color: #64748b;
+            max-width: 500px;
+            line-height: 1.6;
+            margin-bottom: 24px;
+        }
+
+        .ml-required-message .btn-go-evaluation {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 24px;
+            background: #FFCC33;
+            color: #003300;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            border: 2px solid #003300;
+            border-radius: 0;
+            transition: all 0.15s;
+            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        }
+
+        .ml-required-message .btn-go-evaluation:hover {
+            background: #003300;
+            color: #FFCC33;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 51, 0, 0.2);
+        }
+
         /* ---- Pagination (bottom right - edge of page) - matches intern.php ---- */
         .pagination-wrapper {
             display: flex;
@@ -2027,11 +2082,91 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         let currentPage = 1;
         const itemsPerPage = 10;
         let allData = [];
+        let isSentimentServiceRunning = false;
 
         // Load DSS data when page loads
         document.addEventListener('DOMContentLoaded', function() {
-            loadDSSData();
+            checkMLServiceAndLoad();
         });
+
+        // Check if ML service is running before loading data
+        async function checkMLServiceAndLoad() {
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const resultsContainer = document.getElementById('resultsContainer');
+            
+            try {
+                loadingSpinner.style.display = 'flex';
+                loadingSpinner.innerHTML = `
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                    <p>Checking ML service status...</p>
+                `;
+                resultsContainer.style.display = 'none';
+                
+                // Check if sentiment service is available
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1500);
+                
+                try {
+                    const testResponse = await fetch('http://localhost:8000/health', { 
+                        method: 'GET',
+                        signal: controller.signal 
+                    });
+                    clearTimeout(timeoutId);
+                    isSentimentServiceRunning = testResponse.ok;
+                } catch (error) {
+                    console.log('ML service not available');
+                    isSentimentServiceRunning = false;
+                }
+                
+                loadingSpinner.style.display = 'none';
+                
+                // If ML service is NOT running, show requirement message
+                if (!isSentimentServiceRunning) {
+                    displayMLRequiredMessage();
+                    return;
+                }
+                
+                // ML service is running, proceed to load data
+                loadDSSData();
+                
+            } catch (error) {
+                console.error('Error checking ML service:', error);
+                loadingSpinner.style.display = 'none';
+                displayMLRequiredMessage();
+            }
+        }
+
+        // Display message that ML service is required
+        function displayMLRequiredMessage() {
+            const resultsContainer = document.getElementById('resultsContainer');
+            const tbody = document.getElementById('dssTableBody');
+            const summaryStats = document.getElementById('summaryStats');
+            const paginationWrapper = document.getElementById('paginationWrapper');
+            
+            // Clear summary stats
+            summaryStats.innerHTML = '';
+            
+            // Hide pagination
+            paginationWrapper.style.display = 'none';
+            
+            // Show message in table
+            if (tbody) {
+                tbody.innerHTML = `<tr>
+                    <td colspan="8" style="padding:0;border:none;">
+                        <div class="ml-required-message">
+                            <i class="fa-solid fa-robot"></i>
+                            <h3>Machine Learning Service Required</h3>
+                            <p>Run the Machine Learning First in Evaluation to Access Accurate Decision Support System</p>
+                            <a href="evaluation.php" class="btn-go-evaluation">
+                                <i class="fa-solid fa-arrow-right"></i> Go to Evaluation
+                            </a>
+                        </div>
+                    </td>
+                </tr>`;
+            }
+            
+            resultsContainer.style.display = 'flex';
+        }
 
         async function loadDSSData() {
             const loadingSpinner = document.getElementById('loadingSpinner');
@@ -2039,6 +2174,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             
             try {
                 loadingSpinner.style.display = 'flex';
+                loadingSpinner.innerHTML = `
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                    <p>Analyzing student performance metrics...</p>
+                `;
                 resultsContainer.style.display = 'none';
                 
                 // Show pagination with loading state

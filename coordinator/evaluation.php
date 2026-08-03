@@ -918,6 +918,22 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             border-radius: 0;
         }
 
+        .notice-banner.blue {
+    background: #2563eb;        /* Bright blue */
+    border-color: #1d4ed8;
+    color: #ffffff;
+}
+.notice-banner.blue i {
+    color: #ee571b;
+}
+.notice-banner.blue .notice-banner-action {
+    background: #2b8d17;
+    border-color: #1e3a8a;
+}
+.notice-banner.blue .notice-banner-action:hover {
+    background: #b6651a;
+}
+
         .detail-table-wrap {
             overflow-x: auto;
             background: #fff;
@@ -977,9 +993,21 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             border-color: #93c5fd;
         }
 
-        .view-eval-btn:hover {
+        .view-eval-btn:hover:not(:disabled) {
             background: #bfdbfe;
             transform: scale(1.02);
+        }
+
+        .view-eval-btn:disabled {
+            background: #f1f5f9;
+            color: #94a3b8;
+            border-color: #e2e8f0;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .view-eval-btn:disabled:hover {
+            transform: none;
         }
 
         .fb-detail-btn {
@@ -1790,8 +1818,8 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             <!-- Page Content -->
             <div class="page-card">
                 <div class="page-header">
-                    <h2><i class="fa-solid fa-star"></i> Evaluative Sentiment Discrepancy Analysis</h2>
-                    <p>Identifies contradictions between supervisor scores and feedback sentiment to flag potential evaluation inconsistencies.</p>
+                    <!-- <h2><i class="fa-solid fa-star"></i> Evaluative Sentiment Discrepancy Analysis</h2>
+                    <p>Identifies contradictions between supervisor scores and feedback sentiment to flag potential evaluation inconsistencies.</p> -->
                 </div>
 
                 <!-- Loading spinner -->
@@ -2203,6 +2231,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
         // View functions
         function viewStudentDetails(studentId) {
+            // Block access if ML service is not running
+            if (!isSentimentServiceRunning) {
+                showToast('ML Service must be running to view evaluation details. Please start the service first.', 'warning');
+                return;
+            }
+            
             const student = allGroupedStudents.find(s => s.student_id == studentId);
             if (!student) {
                 console.error('Student not found.');
@@ -2422,29 +2456,38 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         }
 
         // ===== NEW: Update the banner based on service state =====
-        function updateBannerServiceState(running) {
-            const banner = document.querySelector('.notice-banner');
-            if (!banner) return;
-            // Keep the banner type data attribute for reference
-            const type = banner.dataset.bannerType;
-            if (type === 'fallback' && running) {
-                banner.className = 'notice-banner success';
-                banner.dataset.bannerType = 'success';
-            } else if (type === 'success' && !running) {
-                banner.className = 'notice-banner';
-                banner.dataset.bannerType = 'fallback';
-            }
-            // Update content
-            banner.innerHTML = `
-                <i class="fa-solid ${running ? 'fa-circle-check' : 'fa-exclamation-triangle'}"></i>
-                <strong>${running ? 'ML Service is running' : 'ML Service is not running'}.</strong>
-                ${running ? 'The sentiment analysis server is active.' : 'Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.'}
-                <span style="margin-left:auto; display:flex; gap:6px;">
-                    ${!running ? `<button type="button" class="notice-banner-action" onclick="runSentimentServiceFromBanner()"><i class="fa-solid fa-play"></i> Run ML Service</button>` : ''}
-                    ${running ? `<button type="button" class="notice-banner-action" style="background:#b91c1c; border-color:#991b1b;" onclick="stopSentimentService()"><i class="fa-solid fa-stop"></i> Stop Service</button>` : ''}
-                </span>
-            `;
-        }
+       function updateBannerServiceState(running) {
+    const banner = document.querySelector('.notice-banner');
+    if (!banner) return;
+    
+    if (running) {
+        // Use blue banner when service is running
+        banner.className = 'notice-banner blue';
+        banner.dataset.bannerType = 'success';
+        banner.innerHTML = `
+            <i class="fa-solid fa-circle-check"></i>
+            <div style="display:flex; flex-direction:column; align-items:flex-start; flex:1; gap:2px;">
+                <strong style="color: #ffffff;">ML Service Running - FastAPI + Uvicorn</strong>
+                <span style="color: #ffffff; font-size: 0.8rem;">Hugging Face Tagalog RoBERTa | You can now view evaluation details</span>
+            </div>
+            <span style="margin-left:auto; display:flex; gap:6px;">
+                <button type="button" class="notice-banner-action" onclick="stopSentimentService()"><i class="fa-solid fa-stop"></i> Stop Service</button>
+            </span>
+        `;
+    } else {
+        // Warning banner when service is not running
+        banner.className = 'notice-banner';
+        banner.dataset.bannerType = 'fallback';
+        banner.innerHTML = `
+            <i class="fa-solid fa-exclamation-triangle"></i>
+            <strong>ML Service Required!</strong>
+            Start the ML service to access evaluation and sentiment analysis.
+            <span style="margin-left:auto; display:flex; gap:6px;">
+                <button type="button" class="notice-banner-action" onclick="runSentimentServiceFromBanner()"><i class="fa-solid fa-play"></i> Run Machine Learning Service</button>
+            </span>
+        `;
+    }
+}
 
         document.addEventListener('DOMContentLoaded', function() {
             const closeSentimentServiceBtn = document.getElementById('closeSentimentServiceBtn');
@@ -2492,6 +2535,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 
                 if (data.success && data.evaluations.length > 0) {
                     allEvaluations = data.evaluations;
+                    // Always analyze sentiments - will use fallback if ML service is not running
                     await analyzeSentiments(data.evaluations);
                 } else {
                     displayEmptyState();
@@ -2763,12 +2807,23 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 </tr>`;
             } else {
                 students.forEach(student => {
+                    // Check if ML service is running - disable button if not
+                    const buttonDisabled = !isSentimentServiceRunning ? 'disabled' : '';
+                    const buttonTitle = !isSentimentServiceRunning ? 'ML Service must be running to view details' : 'View evaluation details';
+                    
                     html += `<tr>
                         <td><span class="student-name">${escapeHtml(student.student_name)}</span></td>
                         <td>${escapeHtml(student.company_name)}</td>
                         <td>${escapeHtml(student.supervisor_name)}</td>
                         <td>${escapeHtml(student.job_title)}</td>
-                        <td><button class="view-eval-btn" onclick="viewStudentDetails(${student.student_id})"><i class="fa-regular fa-eye"></i> View</button></td>
+                        <td>
+                            <button class="view-eval-btn" 
+                                    onclick="viewStudentDetails(${student.student_id})" 
+                                    ${buttonDisabled}
+                                    title="${buttonTitle}">
+                                <i class="fa-regular fa-eye"></i> View
+                            </button>
+                        </td>
                     </tr>`;
                 });
             }
