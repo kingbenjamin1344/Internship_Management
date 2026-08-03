@@ -4,6 +4,7 @@ require_once __DIR__ . '/../includes/rbac.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/student_notifications.php'; // provides getStudentNotifications, etc.
+require_once __DIR__ . '/notification_component.php';
 
 checkAccess('student');
 ensureInternshipTables($pdo);
@@ -354,6 +355,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
     <link rel="stylesheet" href="../assets/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <?php renderStudentNotificationCSS(); ?>
     <style>
         /* ============================================================
            Dark Green (#003300) & Golden Yellow (#FFCC33) theme
@@ -669,192 +671,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         }
 
         /* ===== NOTIFICATION BELL & DROPDOWN ===== */
-        .notif-wrapper {
-            position: relative;
-            display: inline-block;
-        }
-
-        .notif-bell {
-            position: relative;
-            font-size: 1.3rem;
-            color: #FFCC33;
-            background: rgba(255, 204, 51, 0.2);
-            width: 44px;
-            height: 44px;
-            border-radius: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: 0.15s;
-            cursor: pointer;
-            border: none;
-            flex-shrink: 0;
-        }
-
-        .notif-bell:hover {
-            background: rgba(255, 204, 51, 0.4);
-            color: #fff;
-        }
-
-        .notif-badge {
-            position: absolute;
-            top: -2px;
-            right: -2px;
-            background: #ef4444;
-            color: #fff;
-            font-size: 0.6rem;
-            font-weight: 700;
-            min-width: 20px;
-            height: 20px;
-            border-radius: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 2px solid #003300;
-            padding: 0 4px;
-        }
-
-        .notif-badge.hidden {
-            display: none;
-        }
-
-        /* Notification Dropdown */
-        .notif-dropdown {
-            position: absolute;
-            top: calc(100% + 8px);
-            right: 0;
-            width: 380px;
-            max-height: 420px;
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-            display: none;
-            z-index: 1000;
-            overflow: hidden;
-            border-radius: 0;
-        }
-
-        .notif-dropdown.active {
-            display: block;
-            animation: slideDown 0.2s ease;
-        }
-
-        @keyframes slideDown {
-            0% {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            100% {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .notif-dropdown-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 12px 16px;
-            border-bottom: 1px solid #edf2f7;
-            background: #f8fafc;
-        }
-
-        .notif-dropdown-header h3 {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: #0f172a;
-            margin: 0;
-        }
-
-        .notif-dropdown-header .mark-all-read {
-            background: none;
-            border: none;
-            color: #2563eb;
-            font-size: 0.75rem;
-            font-weight: 600;
-            cursor: pointer;
-            padding: 4px 8px;
-            transition: 0.15s;
-            font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-        }
-
-        .notif-dropdown-header .mark-all-read:hover {
-            text-decoration: underline;
-        }
-
-        .notif-list {
-            max-height: 320px;
-            overflow-y: auto;
-            padding: 0;
-        }
-
-        .notif-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 12px 16px;
-            border-bottom: 1px solid #f1f5f9;
-            cursor: pointer;
-            transition: background 0.15s;
-            text-decoration: none;
-            color: inherit;
-        }
-
-        .notif-item:last-child {
-            border-bottom: none;
-        }
-
-        .notif-item:hover {
-            background: #f8fafc;
-        }
-
-        .notif-item.unread {
-            background: #eff6ff;
-            border-left: 3px solid #2563eb;
-        }
-
-        .notif-item .notif-avatar {
-            width: 32px;
-            height: 32px;
-            flex-shrink: 0;
-            background: #e2e8f0;
-            border-radius: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            font-size: 0.7rem;
-            color: #475569;
-            overflow: hidden;
-        }
-
-        .notif-item .notif-avatar img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        .notif-item .notif-content {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .notif-item .notif-content .notif-title {
-            font-weight: 600;
-            font-size: 0.82rem;
-            color: #0f172a;
-            margin-bottom: 2px;
-        }
-
-        .notif-item .notif-content .notif-message {
-            font-size: 0.78rem;
-            color: #64748b;
-            line-height: 1.4;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
 
         .notif-item .notif-content .notif-time {
             font-size: 0.65rem;
@@ -1750,7 +1566,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <?php endif; ?>
                     </nav>
 
-                    <?php renderStudentNotificationBell($unreadCount, $notifications); ?>
+                      <?php renderStudentNotificationBell($unreadCount, $notifications); ?>
                 </div>
             </div>
 
@@ -2460,5 +2276,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             .catch(error => console.error('Error checking notifications:', error));
         }, 30000);
     </script>
+    <?php renderStudentNotificationScript($studentId); ?>
 </body>
 </html>

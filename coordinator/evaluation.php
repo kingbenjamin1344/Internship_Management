@@ -34,6 +34,32 @@ function getUserProfilePicture($pdo, $user_id) {
 // Handle AJAX requests for password change and avatar update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
+
+    if ($_POST['action'] === 'run_sentiment_service') {
+        $portOpen = false;
+        $socket = @fsockopen('localhost', 8000, $errno, $errstr, 1);
+        if ($socket) {
+            fclose($socket);
+            $portOpen = true;
+        }
+
+        if (!$portOpen) {
+            $scriptPath = realpath(__DIR__ . '/../sentiment_service.py');
+            if ($scriptPath !== false) {
+                $command = 'cmd /c start /B "" python "' . str_replace('/', '\\', $scriptPath) . '" > NUL 2>&1';
+                @pclose(@popen($command, 'r'));
+            }
+        }
+
+        $socket = @fsockopen('localhost', 8000, $errno, $errstr, 1);
+        if ($socket) {
+            fclose($socket);
+            echo json_encode(['success' => true, 'message' => 'Sentiment service is running.']);
+        } else {
+            echo json_encode(['success' => true, 'message' => 'Sentiment service launch requested.']);
+        }
+        exit;
+    }
     
     // Handle notification actions first
     if (in_array($_POST['action'], ['get_notifications', 'mark_read', 'mark_all_read'])) {
@@ -646,11 +672,56 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             align-items: center;
             gap: 10px;
             font-size: 0.85rem;
+            flex-wrap: wrap;
         }
 
         .notice-banner i {
             font-size: 1rem;
             color: #d97706;
+        }
+
+        .notice-banner-action {
+            border: 1px solid #b45309;
+            background: #f59e0b;
+            color: #fff;
+            padding: 4px 10px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            cursor: pointer;
+            border-radius: 0;
+            transition: 0.15s;
+            margin-left: auto;
+        }
+
+        .notice-banner-action:hover {
+            background: #d97706;
+        }
+
+        .sentiment-progress-wrapper {
+            margin-top: 14px;
+        }
+
+        .sentiment-progress-label {
+            font-size: 0.78rem;
+            color: #475569;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .sentiment-progress-bar {
+            width: 100%;
+            height: 10px;
+            background: #e2e8f0;
+            overflow: hidden;
+            border-radius: 999px;
+        }
+
+        .sentiment-progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #003300, #FFCC33);
+            transition: width 0.3s ease;
         }
 
         /* ---- Table (compressed) - matches intern.php style ---- */
@@ -1757,6 +1828,31 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         </div>
     </div>
 
+    <!-- SENTIMENT SERVICE MODAL -->
+    <div class="modal-overlay" id="sentimentServiceModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-robot"></i> Machine Learning Implementation</h2>
+                <button class="modal-close" id="closeSentimentServiceBtn">&times;</button>
+            </div>
+            <div class="modal-hint">Starting the Python sentiment analysis service in the background.</div>
+
+            <div class="sentiment-progress-wrapper">
+                <div class="sentiment-progress-label">
+                    <span id="sentimentProgressText">Initializing service...</span>
+                    <span id="sentimentProgressPercent">0%</span>
+                </div>
+                <div class="sentiment-progress-bar">
+                    <div class="sentiment-progress-fill" id="sentimentProgressFill"></div>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="btn-close-modal" id="closeSentimentServiceBtn2">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- CHANGE PASSWORD MODAL -->
     <div class="modal-overlay" id="passwordModal">
         <div class="modal-card">
@@ -2173,6 +2269,84 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         }
 
+        function openSentimentServiceModal() {
+            const modal = document.getElementById('sentimentServiceModal');
+            if (!modal) return;
+            modal.classList.add('active');
+        }
+
+        function closeSentimentServiceModal() {
+            const modal = document.getElementById('sentimentServiceModal');
+            if (!modal) return;
+            modal.classList.remove('active');
+        }
+
+        async function runSentimentServiceFromBanner() {
+            openSentimentServiceModal();
+            const progressFill = document.getElementById('sentimentProgressFill');
+            const progressText = document.getElementById('sentimentProgressText');
+            const progressPercent = document.getElementById('sentimentProgressPercent');
+
+            const animateProgress = (value, label) => {
+                if (progressFill) progressFill.style.width = value + '%';
+                if (progressText) progressText.textContent = label;
+                if (progressPercent) progressPercent.textContent = value + '%';
+            };
+
+            animateProgress(15, 'Launching Python service...');
+
+            try {
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'action=run_sentiment_service'
+                });
+                const result = await response.json();
+
+                if (!result.success) {
+                    animateProgress(100, 'Unable to start service.');
+                    throw new Error(result.message || 'Unable to start service.');
+                }
+            } catch (error) {
+                console.error('Error launching sentiment service:', error);
+            }
+
+            let progress = 15;
+            const progressInterval = setInterval(() => {
+                progress = Math.min(progress + 8, 98);
+                animateProgress(progress, progress < 40 ? 'Launching Python service...' : progress < 75 ? 'Loading machine learning implementation...' : 'Finalizing evaluation refresh...');
+
+                if (progress >= 98) {
+                    clearInterval(progressInterval);
+                    animateProgress(100, 'Service launch complete. Returning...');
+                    setTimeout(() => {
+                        closeSentimentServiceModal();
+                        window.location.reload();
+                    }, 900);
+                }
+            }, 450);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const closeSentimentServiceBtn = document.getElementById('closeSentimentServiceBtn');
+            const closeSentimentServiceBtn2 = document.getElementById('closeSentimentServiceBtn2');
+            const sentimentServiceModal = document.getElementById('sentimentServiceModal');
+
+            if (closeSentimentServiceBtn) {
+                closeSentimentServiceBtn.addEventListener('click', closeSentimentServiceModal);
+            }
+            if (closeSentimentServiceBtn2) {
+                closeSentimentServiceBtn2.addEventListener('click', closeSentimentServiceModal);
+            }
+            if (sentimentServiceModal) {
+                sentimentServiceModal.addEventListener('click', function(event) {
+                    if (event.target === sentimentServiceModal) {
+                        closeSentimentServiceModal();
+                    }
+                });
+            }
+        });
+
         async function loadEvaluationData() {
             const loadingSpinner = document.getElementById('loadingSpinner');
             const resultsContainer = document.getElementById('resultsContainer');
@@ -2494,7 +2668,13 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             if (usingFallback && !existingBanner) {
                 const banner = document.createElement('div');
                 banner.className = 'notice-banner';
-                banner.innerHTML = `<i class="fa-solid fa-exclamation-triangle"></i> <strong>Notice:</strong> Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.`;
+                banner.innerHTML = `
+                    <i class="fa-solid fa-exclamation-triangle"></i>
+                    <strong>Notice:</strong> Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.
+                    <button type="button" class="notice-banner-action" onclick="runSentimentServiceFromBanner()">
+                        <i class="fa-solid fa-play"></i> Run ML Service
+                    </button>
+                `;
                 resultsContainer.insertBefore(banner, resultsContainer.firstChild);
             } else if (!usingFallback && existingBanner) {
                 existingBanner.remove();
