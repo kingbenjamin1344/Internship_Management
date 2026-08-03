@@ -81,6 +81,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     } else {
         $stmt = $pdo->prepare('INSERT INTO jobs (company_id, title, description, responsibility, requirements, slots_available, duration_hours, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([$companyId, $title, $description, $responsibility, $requirements, $slotsAvailable, $durationHours, $userId, $userId]);
+
+        $companyStmt = $pdo->prepare('SELECT company_name FROM companies WHERE id = ? LIMIT 1');
+        $companyStmt->execute([$companyId]);
+        $companyName = $companyStmt->fetchColumn() ?: 'the selected company';
+
+        notifyAdmins(
+            $pdo,
+            $userId,
+            'new_job',
+            'New Job Added',
+            "New internship job '{$title}' has been posted for {$companyName}.",
+            'company.php?tab=jobs'
+        );
+
         $_SESSION['toast_message'] = 'Internship position created successfully!';
         $_SESSION['toast_type'] = 'success';
     }

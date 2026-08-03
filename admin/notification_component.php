@@ -5,16 +5,29 @@
 require_once __DIR__ . '/../includes/admin_notifications.php';
 
 function renderAdminNotificationBell($userId) {
-    // Use the global PDO connection created by including config/database.php earlier
     global $pdo;
 
-    $unreadCount = getAdminUnreadNotificationCount($pdo, $userId);
+    $unreadCount = (int)getAdminUnreadNotificationCount($pdo, $userId);
 
     ?>
     <div class="notif-wrapper">
         <button type="button" class="notif-bell" id="notifBell" aria-label="Notifications">
             <i class="fa-regular fa-bell"></i>
-            <span class="notif-badge" id="notifBadge" aria-hidden="true" style="display: <?php echo $unreadCount > 0 ? 'flex' : 'none'; ?>;">
+            <!-- Badge: only visible when count > 0, circular shape, neutral color -->
+            <span class="notif-badge" id="notifBadge" 
+                  style="display: <?php echo $unreadCount > 0 ? 'inline-flex' : 'none'; ?>; 
+                         align-items: center; 
+                         justify-content: center; 
+                         background-color: #e72727 !important; 
+                         color: #fff !important; 
+                         border-radius: 50% !important; 
+                         padding: 0 6px !important; 
+                         min-width: 20px; 
+                         height: 20px; 
+                         font-size: 0.7rem; 
+                         font-weight: bold; 
+                         margin-left: 2px; 
+                         line-height: 1;">
                 <?php echo $unreadCount > 0 ? $unreadCount : ''; ?>
             </span>
         </button>
@@ -34,7 +47,6 @@ function renderAdminNotificationBell($userId) {
     </div>
 
     <script>
-        // Admin notification script — uses the current page as endpoint
         (function() {
             const notifBell = document.getElementById('notifBell');
             const notifDropdown = document.getElementById('notifDropdown');
@@ -42,29 +54,23 @@ function renderAdminNotificationBell($userId) {
             const notifList = document.getElementById('notifList');
             const markAllReadBtn = document.getElementById('markAllRead');
             const bellClickedKey = 'notif_bell_clicked_admin_' + <?php echo (int)$userId; ?>;
-            const endpoint = window.location.pathname; // Use current page as endpoint
+            const endpoint = window.location.pathname;
 
             function escapeHtml(text) {
                 const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
                 return String(text || '').replace(/[&<>"']/g, m => map[m]);
             }
 
-            function formatDate(dateStr) {
-                if (!dateStr) return '';
-                const d = new Date(dateStr);
-                return d.toLocaleString();
-            }
-
+            // Update badge – always uses !important to override any CSS
             function updateBadge(count) {
                 if (!notifBadge) return;
-                const unreadCount = Number(count) || 0;
-
-                if (unreadCount > 0) {
-                    notifBadge.textContent = unreadCount;
-                    notifBadge.style.display = 'flex';
+                const safeCount = Number(count) || 0;
+                if (safeCount > 0) {
+                    notifBadge.textContent = safeCount;
+                    notifBadge.style.setProperty('display', 'inline-flex', 'important');
                 } else {
                     notifBadge.textContent = '';
-                    notifBadge.style.display = 'none';
+                    notifBadge.style.setProperty('display', 'none', 'important');
                 }
             }
 
@@ -72,11 +78,9 @@ function renderAdminNotificationBell($userId) {
                 if (!notifList) return;
                 if (!notifications || notifications.length === 0) {
                     notifList.innerHTML = '<div class="notif-empty"><i class="fa-regular fa-bell-slash"></i><p>No notifications yet</p></div>';
-                    updateBadge(0);
                     return;
                 }
 
-                // sort: unread first, then newest
                 notifications.sort(function(a,b) {
                     if (a.is_read !== b.is_read) return a.is_read ? 1 : -1;
                     return new Date(b.created_at) - new Date(a.created_at);
@@ -92,16 +96,16 @@ function renderAdminNotificationBell($userId) {
                     const link = notif.link || '#';
                     const role = notif.role || 'system';
                     const roleBadge = '<span class="notif-role-badge ' + role.toLowerCase() + '">' + role + '</span>';
+                    const avatarFile = notif.profile_picture ? String(notif.profile_picture).trim() : '';
+                    const avatarPath = avatarFile ? '../assets/uploads/avatars/' + avatarFile.replace(/^\.+\/+|^\/+/, '') : '';
                     
-                    // Profile picture handling
                     let avatarHtml = '';
-                    if (notif.profile_picture) {
-                        avatarHtml = '<img src="../assets/uploads/avatars/' + escapeHtml(notif.profile_picture) + '" alt="' + escapeHtml(source) + '" title="' + escapeHtml(source) + '">';
+                    if (avatarPath) {
+                        avatarHtml = '<img src="' + escapeHtml(avatarPath) + '" alt="' + escapeHtml(source) + '" title="' + escapeHtml(source) + '">';
                     } else {
                         avatarHtml = '<span class="notif-initials" title="' + escapeHtml(source) + '">' + initials + '</span>';
                     }
                     
-                    // Format time ago
                     const timeAgo = formatTimeAgo(notif.created_at);
 
                     html += '<div class="notif-item ' + readClass + '" data-id="' + notif.id + '" data-link="' + escapeHtml(link) + '">'
@@ -124,10 +128,8 @@ function renderAdminNotificationBell($userId) {
 
                 notifList.innerHTML = html;
 
-                // Attach click handlers
                 document.querySelectorAll('.notif-item').forEach(function(item) {
                     item.addEventListener('click', function(e) {
-                        // ignore clicks on dismiss button
                         if (e.target && e.target.classList.contains('notif-dismiss')) return;
                         const id = this.getAttribute('data-id');
                         const link = this.getAttribute('data-link') || '#';
@@ -165,28 +167,17 @@ function renderAdminNotificationBell($userId) {
                 fd.append('limit', 50);
                 fd.append('offset', 0);
 
-                console.log('Loading notifications from:', endpoint);
-                
                 fetch(endpoint, { method: 'POST', body: fd })
-                    .then(r => {
-                        console.log('Response status:', r.status);
-                        return r.json();
-                    })
+                    .then(r => r.json())
                     .then(data => {
-                        console.log('Notification data received:', data);
                         if (data.success) {
-                            console.log('Number of notifications:', (data.notifications || []).length);
                             renderNotifications(data.notifications || []);
                             updateBadge(data.unread_count || 0);
                         } else {
-                            console.error('Failed to load notifications:', data);
                             notifList.innerHTML = '<div class="notif-empty"><i class="fa-regular fa-bell-slash"></i><p>Unable to load notifications.</p></div>';
-                            updateBadge(0);
                         }
-                    }).catch(err => {
-                        console.error('Fetch error:', err);
+                    }).catch(() => {
                         notifList.innerHTML = '<div class="notif-empty"><i class="fa-regular fa-bell-slash"></i><p>Unable to load notifications.</p></div>';
-                        updateBadge(0);
                     });
             }
 
@@ -204,7 +195,7 @@ function renderAdminNotificationBell($userId) {
                             updateBadge(data.unread_count || 0);
                         }
                         if (link && link !== '#') window.location.href = link;
-                    }).catch(err => { console.error(err); if (link && link !== '#') window.location.href = link; });
+                    }).catch(() => { if (link && link !== '#') window.location.href = link; });
             }
 
             function dismissNotification(id, el) {
@@ -217,17 +208,15 @@ function renderAdminNotificationBell($userId) {
                     .then(data => {
                         if (data.success) {
                             if (el && el.parentNode) el.parentNode.removeChild(el);
-                            // update badge count after deletion
                             const fd2 = new FormData(); fd2.append('action', 'get_notifications'); fd2.append('limit',1); fd2.append('offset',0);
                             return fetch(endpoint, { method: 'POST', body: fd2 });
                         }
                     })
                     .then(resp => resp ? resp.json() : null)
                     .then(j => { if (j && j.unread_count !== undefined) updateBadge(j.unread_count); })
-                    .catch(err => console.error(err));
+                    .catch(() => {});
             }
 
-            // Mark all as read
             if (markAllReadBtn) {
                 markAllReadBtn.addEventListener('click', function(e) {
                     e.preventDefault(); e.stopPropagation();
@@ -237,7 +226,6 @@ function renderAdminNotificationBell($userId) {
                 });
             }
 
-            // Bell toggle
             if (notifBell) {
                 notifBell.addEventListener('click', function(e) {
                     e.stopPropagation();
@@ -245,7 +233,7 @@ function renderAdminNotificationBell($userId) {
                     if (!isOpen) {
                         notifDropdown.classList.add('open');
                         loadNotifications();
-                        updateBadge(0);
+                        // Removed the line that hides the badge – it stays consistent
                         localStorage.setItem(bellClickedKey, 'true');
                     } else {
                         notifDropdown.classList.remove('open');
@@ -253,27 +241,35 @@ function renderAdminNotificationBell($userId) {
                 });
             }
 
-            // Load notifications immediately so the card has fresh content
+            // Initial load
             loadNotifications();
 
-            // Close when clicking outside
-            document.addEventListener('click', function(e) { if (notifDropdown && !notifDropdown.contains(e.target) && e.target !== notifBell && !notifBell.contains(e.target)) notifDropdown.classList.remove('open'); });
+            // Click outside to close
+            document.addEventListener('click', function(e) { 
+                if (notifDropdown && !notifDropdown.contains(e.target) && e.target !== notifBell && !notifBell.contains(e.target)) {
+                    notifDropdown.classList.remove('open');
+                }
+            });
 
-            // Periodic badge refresh
+            // Periodic badge refresh (every 30s)
             setInterval(function() {
                 if (notifDropdown && !notifDropdown.classList.contains('open')) {
-                    const fd = new FormData(); fd.append('action','get_notifications'); fd.append('limit',1); fd.append('offset',0);
-                    fetch(endpoint, { method:'POST', body:fd }).then(r=>r.json()).then(d=>{
-                        if (d && d.unread_count !== undefined) {
-                            updateBadge(d.unread_count || 0);
-                            if (localStorage.getItem(bellClickedKey) !== 'true' && d.unread_count > 0) {
-                                updateBadge(d.unread_count);
-                            }
-                            if (d.unread_count === 0) {
-                                localStorage.removeItem(bellClickedKey);
-                            }
-                        }
-                    }).catch(()=>{});
+                    const fd = new FormData(); 
+                    fd.append('action','get_notifications'); 
+                    fd.append('limit',1); 
+                    fd.append('offset',0);
+                    fetch(endpoint, { method:'POST', body:fd })
+                        .then(r=>r.json())
+                        .then(d=>{ 
+                            if (d && d.unread_count !== undefined) { 
+                                if (localStorage.getItem(bellClickedKey) !== 'true' && d.unread_count>0) {
+                                    updateBadge(d.unread_count);
+                                }
+                                if (d.unread_count===0) {
+                                    localStorage.removeItem(bellClickedKey);
+                                }
+                            } 
+                        }).catch(()=>{});
                 }
             }, 30000);
 

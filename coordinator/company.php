@@ -173,7 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $companyId = $pdo->lastInsertId();
         notifyAdmins(
             $pdo,
-            $companyId,
+            $userId,
             'new_company',
             'New Company Added',
             "New company '{$company_name}' has been added.",
