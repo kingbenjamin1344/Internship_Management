@@ -60,6 +60,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
         exit;
     }
+
+    // ===== NEW: Stop sentiment service =====
+    if ($_POST['action'] === 'stop_sentiment_service') {
+        $stopped = false;
+        $port = 8000;
+
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            $output = shell_exec('netstat -ano | findstr :' . $port . ' | findstr LISTENING');
+            if ($output) {
+                $lines = explode("\n", $output);
+                foreach ($lines as $line) {
+                    if (strpos($line, 'LISTENING') !== false) {
+                        $parts = preg_split('/\s+/', trim($line));
+                        $pid = end($parts);
+                        if (is_numeric($pid)) {
+                            shell_exec('taskkill /PID ' . $pid . ' /F');
+                            $stopped = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            $pid = shell_exec('lsof -t -i:' . $port . ' 2>/dev/null');
+            if (trim($pid)) {
+                shell_exec('kill -9 ' . trim($pid));
+                $stopped = true;
+            }
+        }
+
+        $socket = @fsockopen('localhost', $port, $errno, $errstr, 1);
+        $stillRunning = ($socket !== false);
+        if ($socket) fclose($socket);
+
+        if ($stopped && !$stillRunning) {
+            echo json_encode(['success' => true, 'message' => 'Sentiment service stopped.']);
+        } elseif ($stillRunning) {
+            echo json_encode(['success' => false, 'message' => 'Failed to stop the service. It is still running.']);
+        } else {
+            echo json_encode(['success' => true, 'message' => 'Service was not running.']);
+        }
+        exit;
+    }
     
     // Handle notification actions first
     if (in_array($_POST['action'], ['get_notifications', 'mark_read', 'mark_all_read'])) {
@@ -1905,6 +1948,7 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
         let allEvaluations = [];
         let allGroupedStudents = [];
         let currentStudentId = null;
+        let isSentimentServiceRunning = false;
 
         // ===== PAGINATION VARIABLES =====
         let currentPage = 1;
@@ -2337,6 +2381,71 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             }, 450);
         }
 
+        // ===== NEW: Check sentiment service status =====
+        async function checkSentimentService() {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1500);
+                const resp = await fetch('http://localhost:8000/health', {
+                    method: 'GET',
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                return resp.ok;
+            } catch {
+                return false;
+            }
+        }
+
+        // ===== NEW: Stop sentiment service =====
+        async function stopSentimentService() {
+            try {
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'action=stop_sentiment_service'
+                });
+                const result = await response.json();
+                if (result.success) {
+                    showToast(result.message, 'success');
+                    // Update banner state after stopping
+                    const running = await checkSentimentService();
+                    isSentimentServiceRunning = running;
+                    updateBannerServiceState(running);
+                } else {
+                    showToast(result.message || 'Failed to stop service.', 'error');
+                }
+            } catch (error) {
+                console.error('Error stopping service:', error);
+                showToast('An error occurred while stopping the service.', 'error');
+            }
+        }
+
+        // ===== NEW: Update the banner based on service state =====
+        function updateBannerServiceState(running) {
+            const banner = document.querySelector('.notice-banner');
+            if (!banner) return;
+            // Keep the banner type data attribute for reference
+            const type = banner.dataset.bannerType;
+            if (type === 'fallback' && running) {
+                banner.className = 'notice-banner success';
+                banner.dataset.bannerType = 'success';
+            } else if (type === 'success' && !running) {
+                banner.className = 'notice-banner';
+                banner.dataset.bannerType = 'fallback';
+            }
+            // Update content
+            banner.innerHTML = `
+                <i class="fa-solid ${running ? 'fa-circle-check' : 'fa-exclamation-triangle'}"></i>
+                <strong>${running ? 'ML Service is running' : 'ML Service is not running'}.</strong>
+                ${running ? 'The sentiment analysis server is active.' : 'Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.'}
+                <span style="margin-left:auto; display:flex; gap:6px;">
+                    ${!running ? `<button type="button" class="notice-banner-action" onclick="runSentimentServiceFromBanner()"><i class="fa-solid fa-play"></i> Run ML Service</button>` : ''}
+                    ${running ? `<button type="button" class="notice-banner-action" style="background:#b91c1c; border-color:#991b1b;" onclick="stopSentimentService()"><i class="fa-solid fa-stop"></i> Stop Service</button>` : ''}
+                </span>
+            `;
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             const closeSentimentServiceBtn = document.getElementById('closeSentimentServiceBtn');
             const closeSentimentServiceBtn2 = document.getElementById('closeSentimentServiceBtn2');
@@ -2667,43 +2776,32 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             tbody.innerHTML = html;
         }
 
-        function displayResults(groupedStudents, usingFallback) {
+        async function displayResults(groupedStudents, usingFallback) {
             const resultsContainer = document.getElementById('resultsContainer');
             
             // Show results container
             resultsContainer.style.display = 'flex';
             
+            // Remove any existing banner
             const existingBanner = document.querySelector('.notice-banner');
-            if (usingFallback) {
-                if (!existingBanner || existingBanner.dataset.bannerType !== 'fallback') {
-                    if (existingBanner) existingBanner.remove();
-                    const banner = document.createElement('div');
-                    banner.className = 'notice-banner';
-                    banner.dataset.bannerType = 'fallback';
-                    banner.innerHTML = `
-                        <i class="fa-solid fa-exclamation-triangle"></i>
-                        <strong>Notice:</strong> Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.
-                        <button type="button" class="notice-banner-action" onclick="runSentimentServiceFromBanner()">
-                            <i class="fa-solid fa-play"></i> Run ML Service
-                        </button>
-                    `;
-                    resultsContainer.insertBefore(banner, resultsContainer.firstChild);
-                }
-            } else {
-                if (!existingBanner || existingBanner.dataset.bannerType !== 'success') {
-                    if (existingBanner) existingBanner.remove();
-                    const banner = document.createElement('div');
-                    banner.className = 'notice-banner success';
-                    banner.dataset.bannerType = 'success';
-                    banner.innerHTML = `
-                        <i class="fa-solid fa-circle-check"></i>
-                        <strong>ML Service:</strong> Serving via FastAPI + Uvicorn server using Hugging Face Tagalog RoBERTa.
-                    `;
-                    resultsContainer.insertBefore(banner, resultsContainer.firstChild);
-                }
-            }
-            
-            // Store filtered students and render first page
+            if (existingBanner) existingBanner.remove();
+
+            // Create a new banner with a loading state
+            const banner = document.createElement('div');
+            banner.className = 'notice-banner';
+            banner.dataset.bannerType = 'unknown';
+            banner.innerHTML = `
+                <i class="fa-solid fa-spinner fa-spin"></i>
+                <strong>Checking service status...</strong>
+            `;
+            resultsContainer.insertBefore(banner, resultsContainer.firstChild);
+
+            // Check actual service status
+            const running = await checkSentimentService();
+            isSentimentServiceRunning = running;
+            updateBannerServiceState(running);
+
+            // Store and display data
             filteredStudents = groupedStudents.sort((a,b) => a.student_name.localeCompare(b.student_name));
             
             // Show pagination
