@@ -14,9 +14,9 @@ function renderAdminNotificationBell($userId) {
     <div class="notif-wrapper">
         <button type="button" class="notif-bell" id="notifBell" aria-label="Notifications">
             <i class="fa-regular fa-bell"></i>
-            <?php if ($unreadCount > 0): ?>
-                <span class="notif-badge" id="notifBadge" aria-hidden="true"><?php echo $unreadCount; ?></span>
-            <?php endif; ?>
+            <span class="notif-badge" id="notifBadge" aria-hidden="true" style="display: <?php echo $unreadCount > 0 ? 'flex' : 'none'; ?>;">
+                <?php echo $unreadCount > 0 ? $unreadCount : ''; ?>
+            </span>
         </button>
 
         <div class="notif-dropdown" id="notifDropdown">
@@ -38,6 +38,7 @@ function renderAdminNotificationBell($userId) {
         (function() {
             const notifBell = document.getElementById('notifBell');
             const notifDropdown = document.getElementById('notifDropdown');
+            const notifBadge = document.getElementById('notifBadge');
             const notifList = document.getElementById('notifList');
             const markAllReadBtn = document.getElementById('markAllRead');
             const bellClickedKey = 'notif_bell_clicked_admin_' + <?php echo (int)$userId; ?>;
@@ -55,29 +56,15 @@ function renderAdminNotificationBell($userId) {
             }
 
             function updateBadge(count) {
+                if (!notifBadge) return;
                 const unreadCount = Number(count) || 0;
 
                 if (unreadCount > 0) {
-                    let badge = document.getElementById('notifBadge');
-                    if (!badge) {
-                        badge = document.createElement('span');
-                        badge.className = 'notif-badge';
-                        badge.id = 'notifBadge';
-                        badge.setAttribute('aria-hidden', 'true');
-                        notifBell.appendChild(badge);
-                    }
-
-                    badge.textContent = unreadCount;
-                    badge.style.display = 'flex';
-                    badge.hidden = false;
-                    return;
-                }
-
-                const badge = document.getElementById('notifBadge');
-                if (badge) {
-                    badge.textContent = '';
-                    badge.style.display = 'none';
-                    badge.hidden = true;
+                    notifBadge.textContent = unreadCount;
+                    notifBadge.style.display = 'flex';
+                } else {
+                    notifBadge.textContent = '';
+                    notifBadge.style.display = 'none';
                 }
             }
 
@@ -279,6 +266,9 @@ function renderAdminNotificationBell($userId) {
                     fetch(endpoint, { method:'POST', body:fd }).then(r=>r.json()).then(d=>{
                         if (d && d.unread_count !== undefined) {
                             updateBadge(d.unread_count || 0);
+                            if (localStorage.getItem(bellClickedKey) !== 'true' && d.unread_count > 0) {
+                                updateBadge(d.unread_count);
+                            }
                             if (d.unread_count === 0) {
                                 localStorage.removeItem(bellClickedKey);
                             }

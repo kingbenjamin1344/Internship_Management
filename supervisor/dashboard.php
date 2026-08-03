@@ -440,21 +440,6 @@ $result = markSupervisorNotificationRead($pdo, $notification_id, $userId);
         ]);
         exit;
     }
-
-    if ($_POST['action'] === 'delete') {
-        $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
-        if ($notification_id > 0) {
-            $result = deleteSupervisorNotification($pdo, $notification_id, $userId);
-            $unreadCount = getSupervisorUnreadNotificationCount($pdo, $userId);
-            echo json_encode([
-                'success' => $result,
-                'unread_count' => $unreadCount
-            ]);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
-        }
-        exit;
-    }
 }
 
 // Get real statistics
@@ -1701,7 +1686,71 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <a class="nav-item-header" href="myintern.php"> My Interns</a>
                     </nav>
 
-                    <?php renderSupervisorNotificationBell($userId); ?>
+                    <!-- Notification bell with dropdown -->
+                    <div class="notif-wrapper">
+                        <button class="notif-bell" id="notifBell" aria-label="Notifications">
+                            <i class="fa-regular fa-bell"></i>
+                            <span class="notif-badge <?php echo $unreadCount > 0 ? '' : 'hidden'; ?>" id="notifBadge">
+                                <?php echo $unreadCount > 0 ? $unreadCount : ''; ?>
+                            </span>
+                        </button>
+
+                        <!-- Notification Dropdown -->
+                        <div class="notif-dropdown" id="notifDropdown">
+                            <div class="notif-dropdown-header">
+                                <h3>Notifications</h3>
+                                <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                            </div>
+                            <div class="notif-list" id="notifList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notif): ?>
+                                        <?php 
+                                            $isDPR = isset($notif['type_group']) && $notif['type_group'] === 'dpr_submission';
+                                            $link = $isDPR ? ($notif['link'] ?? 'dpr_review.php?id=' . ($notif['dpr_id'] ?? 0)) : ($notif['link'] ?? '#');
+                                            $id = $isDPR ? ($notif['dpr_id'] ?? 0) : ($notif['id'] ?? 0);
+                                            $type = $isDPR ? 'dpr_submission' : 'notification';
+                                            $source = getSupervisorNotificationSource($notif);
+                                            $messageText = getSupervisorNotificationMessage($notif);
+                                        ?>
+                                        <a href="<?php echo htmlspecialchars($link); ?>" 
+                                           class="notif-item <?php echo $notif['is_read'] ? '' : 'unread'; ?>"
+                                           data-id="<?php echo $id; ?>"
+                                           data-type="<?php echo $type; ?>"
+                                           onclick="handleNotificationClick(event, <?php echo $id; ?>, '<?php echo htmlspecialchars($link); ?>', '<?php echo $type; ?>')">
+                                            <div class="notif-avatar">
+                                                <?php if (!empty($notif['profile_picture'])): ?>
+                                                    <img src="<?php echo htmlspecialchars($avatarPublicPath . $notif['profile_picture']); ?>" alt="Avatar">
+                                                <?php else: ?>
+                                                    <?php 
+                                                        $initials = strtoupper(substr($notif['firstname'] ?? 'U', 0, 1) . substr($notif['lastname'] ?? 'N', 0, 1));
+                                                        echo htmlspecialchars($initials ?: 'UN');
+                                                    ?>
+                                                <?php endif; ?>
+                                                <?php if ($isDPR): ?>
+                                                    <span class="dpr-badge"><i class="fa-solid fa-file-pen"></i></span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div class="notif-content">
+                                                <div class="notif-title">
+                                                    <?php echo htmlspecialchars($notif['title'] ?? 'Notification'); ?>
+                                                    <?php if ($isDPR): ?>
+                                                        <span class="dpr-tag">DPR</span>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <div class="notif-message"><?php echo htmlspecialchars($messageText); ?></div>
+                                                <span class="notif-time"><?php echo htmlspecialchars($source); ?> - <?php echo htmlspecialchars(timeAgo($notif['created_at'] ?? '')); ?></span>
+                                            </div>
+                                        </a>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="notif-empty">
+                                        <i class="fa-regular fa-bell-slash"></i>
+                                        <p>No notifications yet</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1920,15 +1969,6 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 const initials = notif.firstname && notif.lastname ? 
                     (notif.firstname.charAt(0) + notif.lastname.charAt(0)).toUpperCase() : 'UN';
                 
-                // Get message - if both title and message exist and are the same, only show once
-                let displayMessage = notif.message || '';
-                const title = notif.title || 'Notification';
-                
-                // If message is empty, don't show it (avoid showing title twice)
-                if (!displayMessage || displayMessage.trim() === title.trim()) {
-                    displayMessage = '';
-                }
-                
                 html += `
                     <a href="${link}" 
                        class="notif-item ${isUnread ? 'unread' : ''}"
@@ -1941,10 +1981,10 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         </div>
                         <div class="notif-content">
                             <div class="notif-title">
-                                ${escapeHtml(title)}
+                                ${escapeHtml(notif.title || 'Notification')}
                                 ${isDPR ? `<span class="dpr-tag">DPR</span>` : ''}
                             </div>
-                            ${displayMessage ? `<div class="notif-message">${escapeHtml(displayMessage)}</div>` : ''}
+                            <div class="notif-message">${escapeHtml(notif.message || '')}</div>
                             <span class="notif-time">${escapeHtml((notif.firstname && notif.lastname) ? `${notif.firstname} ${notif.lastname}` : 'System')} - ${timeAgo(notif.created_at)}</span>
                         </div>
                     </a>

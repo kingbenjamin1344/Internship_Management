@@ -59,18 +59,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         echo json_encode(['success' => $result, 'unread_count' => 0]);
         exit;
     }
-
-    if ($_POST['action'] === 'delete') {
-        $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
-        if ($notification_id > 0) {
-            $result = deleteSupervisorNotification($pdo, $notification_id, $userId);
-            $unreadCount = getSupervisorUnreadNotificationCount($pdo, $userId);
-            echo json_encode(['success' => $result, 'unread_count' => $unreadCount]);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Invalid notification ID']);
-        }
-        exit;
-    }
 }
 
 // Handle Create Job
@@ -93,23 +81,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     } else {
         $stmt = $pdo->prepare('INSERT INTO jobs (company_id, title, description, responsibility, requirements, slots_available, duration_hours, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([$companyId, $title, $description, $responsibility, $requirements, $slotsAvailable, $durationHours, $userId, $userId]);
-        $jobId = $pdo->lastInsertId();
-        
-        // Notify admins about new job posting
-        $companyNameStmt = $pdo->prepare('SELECT company_name FROM companies WHERE id = ?');
-        $companyNameStmt->execute([$companyId]);
-        $companyNameResult = $companyNameStmt->fetch();
-        $companyName = $companyNameResult ? $companyNameResult['company_name'] : 'Unknown Company';
-        
-        notifyAdmins(
-            $pdo,
-            $userId,
-            'new_job',
-            'New Job Posted',
-            "New job '{$title}' at {$companyName} has been posted.",
-            'company.php'
-        );
-        
         $_SESSION['toast_message'] = 'Internship position created successfully!';
         $_SESSION['toast_type'] = 'success';
     }
@@ -1803,7 +1774,58 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                         <a class="nav-item-header" href="myintern.php"> My Interns</a>
                     </nav>
 
-                    <?php renderSupervisorNotificationBell($userId); ?>
+                    <!-- Notification bell with dropdown -->
+                    <div class="notif-wrapper">
+                        <button class="notif-bell" id="notifBell" aria-label="Notifications">
+                            <i class="fa-regular fa-bell"></i>
+                            <span class="notif-badge <?php echo $unreadCount > 0 ? '' : 'hidden'; ?>" id="notifBadge">
+                                <?php echo $unreadCount > 0 ? $unreadCount : ''; ?>
+                            </span>
+                        </button>
+
+                        <!-- Notification Dropdown -->
+                        <div class="notif-dropdown" id="notifDropdown">
+                            <div class="notif-dropdown-header">
+                                <h3>Notifications</h3>
+                                <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                            </div>
+                            <div class="notif-list" id="notifList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notif): ?>
+                                        <?php
+                                            $messageText = getSupervisorNotificationMessage($notif);
+                                            $source = getSupervisorNotificationSource($notif);
+                                        ?>
+                                        <a href="<?php echo htmlspecialchars($notif['link'] ?? '#'); ?>"
+                                           class="notif-item <?php echo $notif['is_read'] ? '' : 'unread'; ?>"
+                                           data-id="<?php echo $notif['id']; ?>"
+                                           onclick="handleNotificationClick(event, <?php echo $notif['id']; ?>, '<?php echo htmlspecialchars($notif['link'] ?? '#'); ?>')">
+                                            <div class="notif-avatar">
+                                                <?php if (!empty($notif['profile_picture'])): ?>
+                                                    <img src="<?php echo htmlspecialchars($avatarPublicPath . $notif['profile_picture']); ?>" alt="Avatar">
+                                                <?php else: ?>
+                                                    <?php 
+                                                        $initials = strtoupper(substr($notif['firstname'] ?? 'U', 0, 1) . substr($notif['lastname'] ?? 'N', 0, 1));
+                                                        echo htmlspecialchars($initials ?: 'UN');
+                                                    ?>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div class="notif-content">
+                                                <div class="notif-title"><?php echo htmlspecialchars($notif['title'] ?? 'Notification'); ?></div>
+                                                <div class="notif-message"><?php echo htmlspecialchars($messageText); ?></div>
+                                                <span class="notif-time"><?php echo htmlspecialchars($source); ?> - <?php echo htmlspecialchars(timeAgo($notif['created_at'] ?? '')); ?></span>
+                                            </div>
+                                        </a>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="notif-empty">
+                                        <i class="fa-regular fa-bell-slash"></i>
+                                        <p>No notifications yet</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
