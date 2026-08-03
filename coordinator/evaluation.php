@@ -675,9 +675,19 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             flex-wrap: wrap;
         }
 
+        .notice-banner.success {
+            background: #ecfdf5;
+            border-color: #86efac;
+            color: #166534;
+        }
+
         .notice-banner i {
             font-size: 1rem;
             color: #d97706;
+        }
+
+        .notice-banner.success i {
+            color: #16a34a;
         }
 
         .notice-banner-action {
@@ -2663,21 +2673,34 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             // Show results container
             resultsContainer.style.display = 'flex';
             
-            // Add notice banner if using fallback
             const existingBanner = document.querySelector('.notice-banner');
-            if (usingFallback && !existingBanner) {
-                const banner = document.createElement('div');
-                banner.className = 'notice-banner';
-                banner.innerHTML = `
-                    <i class="fa-solid fa-exclamation-triangle"></i>
-                    <strong>Notice:</strong> Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.
-                    <button type="button" class="notice-banner-action" onclick="runSentimentServiceFromBanner()">
-                        <i class="fa-solid fa-play"></i> Run ML Service
-                    </button>
-                `;
-                resultsContainer.insertBefore(banner, resultsContainer.firstChild);
-            } else if (!usingFallback && existingBanner) {
-                existingBanner.remove();
+            if (usingFallback) {
+                if (!existingBanner || existingBanner.dataset.bannerType !== 'fallback') {
+                    if (existingBanner) existingBanner.remove();
+                    const banner = document.createElement('div');
+                    banner.className = 'notice-banner';
+                    banner.dataset.bannerType = 'fallback';
+                    banner.innerHTML = `
+                        <i class="fa-solid fa-exclamation-triangle"></i>
+                        <strong>Notice:</strong> Advanced sentiment analysis service is unavailable. Using keyword-based fallback analysis.
+                        <button type="button" class="notice-banner-action" onclick="runSentimentServiceFromBanner()">
+                            <i class="fa-solid fa-play"></i> Run ML Service
+                        </button>
+                    `;
+                    resultsContainer.insertBefore(banner, resultsContainer.firstChild);
+                }
+            } else {
+                if (!existingBanner || existingBanner.dataset.bannerType !== 'success') {
+                    if (existingBanner) existingBanner.remove();
+                    const banner = document.createElement('div');
+                    banner.className = 'notice-banner success';
+                    banner.dataset.bannerType = 'success';
+                    banner.innerHTML = `
+                        <i class="fa-solid fa-circle-check"></i>
+                        <strong>ML Service:</strong> Serving via FastAPI + Uvicorn server using Hugging Face Tagalog RoBERTa.
+                    `;
+                    resultsContainer.insertBefore(banner, resultsContainer.firstChild);
+                }
             }
             
             // Store filtered students and render first page
