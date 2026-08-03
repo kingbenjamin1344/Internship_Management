@@ -2378,11 +2378,12 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
             const animateProgress = (value, label) => {
                 if (progressFill) progressFill.style.width = value + '%';
                 if (progressText) progressText.textContent = label;
-                if (progressPercent) progressPercent.textContent = value + '%';
+                if (progressPercent) progressPercent.textContent = Math.round(value) + '%';
             };
 
-            animateProgress(15, 'Launching Python service...');
+            animateProgress(10, 'Initializing ML service...');
 
+            // Step 1: Request to start the service
             try {
                 const response = await fetch(window.location.href, {
                     method: 'POST',
@@ -2393,26 +2394,88 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
 
                 if (!result.success) {
                     animateProgress(100, 'Unable to start service.');
-                    throw new Error(result.message || 'Unable to start service.');
+                    showToast('Failed to start ML service. Please try again.', 'error');
+                    setTimeout(() => {
+                        closeSentimentServiceModal();
+                    }, 2000);
+                    return;
                 }
             } catch (error) {
                 console.error('Error launching sentiment service:', error);
+                animateProgress(100, 'Error starting service.');
+                showToast('Error launching ML service.', 'error');
+                setTimeout(() => {
+                    closeSentimentServiceModal();
+                }, 2000);
+                return;
             }
 
-            let progress = 15;
-            const progressInterval = setInterval(() => {
-                progress = Math.min(progress + 8, 98);
-                animateProgress(progress, progress < 40 ? 'Launching Python service...' : progress < 75 ? 'Loading machine learning implementation...' : 'Finalizing evaluation refresh...');
+            animateProgress(20, 'Starting Python FastAPI server...');
 
-                if (progress >= 98) {
-                    clearInterval(progressInterval);
-                    animateProgress(100, 'Service launch complete. Returning...');
+            // Step 2: Keep checking until service is actually running
+            let attempts = 0;
+            const maxAttempts = 60; // 60 attempts = 30 seconds (checking every 500ms)
+            let currentProgress = 20;
+            
+            const checkServiceRunning = async () => {
+                attempts++;
+                
+                // Gradually increase progress as we wait
+                if (currentProgress < 90) {
+                    currentProgress += 1.2;
+                    animateProgress(
+                        Math.min(currentProgress, 90), 
+                        attempts < 10 ? 'Starting Python FastAPI server...' :
+                        attempts < 20 ? 'Loading Hugging Face model...' :
+                        attempts < 35 ? 'Initializing RoBERTa sentiment analyzer...' :
+                        'Waiting for service to be ready...'
+                    );
+                }
+                
+                try {
+                    // Check if service is actually responding
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 1000);
+                    
+                    const healthCheck = await fetch('http://localhost:8000/health', {
+                        method: 'GET',
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                    
+                    if (healthCheck.ok) {
+                        // Service is UP! Complete the loading
+                        animateProgress(95, 'ML service is now running!');
+                        setTimeout(() => {
+                            animateProgress(100, 'Service ready. Refreshing page...');
+                            setTimeout(() => {
+                                closeSentimentServiceModal();
+                                window.location.reload();
+                            }, 800);
+                        }, 500);
+                        return; // Exit the checking loop
+                    }
+                } catch (error) {
+                    // Service not ready yet, continue checking
+                }
+                
+                // Check if we've exceeded max attempts
+                if (attempts >= maxAttempts) {
+                    animateProgress(100, 'Service taking longer than expected...');
+                    showToast('ML service is starting but taking longer than usual. Please refresh the page in a moment.', 'warning');
                     setTimeout(() => {
                         closeSentimentServiceModal();
                         window.location.reload();
-                    }, 900);
+                    }, 3000);
+                    return;
                 }
-            }, 450);
+                
+                // Continue checking after 500ms
+                setTimeout(checkServiceRunning, 500);
+            };
+            
+            // Start checking after a 1 second delay (give service time to initialize)
+            setTimeout(checkServiceRunning, 1000);
         }
 
         // ===== NEW: Check sentiment service status =====
@@ -2471,6 +2534,9 @@ $profilePictureUrl = $profilePicture ? $avatarPublicPath . $profilePicture : '';
                 <span style="color: #ffffff; font-size: 0.8rem;">Hugging Face Tagalog RoBERTa | You can now view evaluation details</span>
             </div>
             <span style="margin-left:auto; display:flex; gap:6px;">
+                <button type="button" class="notice-banner-action" onclick="window.open('http://localhost:8000', '_blank')" title="Open service in new tab to verify">
+                    <i class="fa-solid fa-external-link-alt"></i> Verify Service
+                </button>
                 <button type="button" class="notice-banner-action" onclick="stopSentimentService()"><i class="fa-solid fa-stop"></i> Stop Service</button>
             </span>
         `;
